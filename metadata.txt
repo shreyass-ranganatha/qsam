@@ -1,0 +1,10 @@
+[general]
+name=QSAM
+description=Semi-automatic labeling with SAM
+about=Semi-automatic labeling with SAM,
+version=0.1
+qgisMinimumVersion=3.0
+author=Shreyas Ranganatha
+email=shreyass.ranganatha@gmail.com
+tracker=https://github.com/shreyass-ranganatha/QSAM/issues
+repository=https://github.com/shreyass-ranganatha/QSAM
