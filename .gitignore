@@ -1,5 +1,9 @@
 #
 .DS_Store
 
+/assets/checkpoints/*
+!/assets/checkpoints/.gitkeep
+
 #
 __pycache__/
+/archives/

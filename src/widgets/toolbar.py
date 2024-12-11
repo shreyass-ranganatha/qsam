@@ -13,16 +13,6 @@ __all__ = ["QSamToolBar"]
 class BBoxTool(QgsMapTool):
     bbox_select = pyqtSignal(QgsRectangle)
 
-    def __init__(self, canvas: QgsMapCanvas):
-        super().__init__(canvas)
-
-        self.x1y1 = None
-        self.x2y2 = None
-
-        self.tracking = False
-
-        self._rb = QgsRubberBand(self.canvas(), Qgis.GeometryType.Polygon)
-
     def _draw_rect(self, x1y1, x2y2):
         self._rb.reset()
 
@@ -40,6 +30,16 @@ class BBoxTool(QgsMapTool):
     def _clear_rect(self):
         self._rb.reset()
         self.canvas().refresh()
+
+    def __init__(self, canvas: QgsMapCanvas):
+        super().__init__(canvas)
+
+        self.x1y1 = None
+        self.x2y2 = None
+
+        self.tracking = False
+
+        self._rb = QgsRubberBand(self.canvas(), Qgis.GeometryType.Polygon)
 
     def activate(self):
         self.canvas().setMapTool(self)
@@ -60,11 +60,11 @@ class BBoxTool(QgsMapTool):
 
             self._draw_rect(self.x1y1, self.x1y1)
 
-        elif e.button() == Qt.RightButton and \
-                self.x1y1 is not None and \
-                self.x2y2 is not None:
-
-            # QMessageBox.information(None, "QSAM", f"Selected BBox: {self.x1y1} - {self.x2y2}")
+        elif (
+            e.button() == Qt.RightButton and
+            self.x1y1 is not None and
+            self.x2y2 is not None
+        ):
             self.bbox_select.emit(QgsRectangle(self.x1y1, self.x2y2))
 
             self.x1y1 = None
@@ -92,16 +92,6 @@ class QSamTool(QgsMapTool):
     stream = pyqtSignal(QgsPointXY)
     prompt = pyqtSignal(list)
 
-    def set_bbox(self, bbox: QgsRectangle):
-        self._clear_markers()
-        self.bbox = bbox
-
-    def __init__(self, canvas: QgsMapCanvas):
-        super().__init__(canvas)
-
-        self.bbox: QgsRectangle = None
-        self.points = []
-
     def _mark_point(self, x, y, l):
         pt = QgsPointXY(x, y)
 
@@ -112,7 +102,7 @@ class QSamTool(QgsMapTool):
         mrk.setPenWidth(3)
 
         self.canvas().refresh()
-        self.points.append([pt, mrk])
+        self.points.append([(x, y, l), mrk])
 
     def _clear_markers(self):
         scene: QGraphicsScene = self.canvas().scene()
@@ -122,9 +112,18 @@ class QSamTool(QgsMapTool):
         self.canvas().refresh()
         self.points = []
 
+    def __init__(self, canvas: QgsMapCanvas):
+        super().__init__(canvas)
+
+        self.bbox: QgsRectangle = None
+        self.points = []
+
+    def set_bbox(self, bbox: QgsRectangle):
+        self._clear_markers()
+        self.bbox = bbox
+
     def activate(self):
         self.canvas().setMapTool(self)
-
         return super().activate()
 
     def deactivate(self):
@@ -163,7 +162,7 @@ class QSamTool(QgsMapTool):
             self._clear_markers()
 
         elif e.button() == Qt.RightButton:
-            self.prompt.emit(self.points)
+            self.prompt.emit([p[0] for p in self.points])
             self._clear_markers()
 
         return super().canvasDoubleClickEvent(e)
@@ -184,7 +183,7 @@ class QSamToolBar(QToolBar):
         self.action_use_qsam = QAction("Q", self)
         self.action_use_qsam.setToolTip("Use QSAM")
         self.action_use_qsam.setCheckable(True)
-        self.action_use_qsam.toggled.connect(self._on_toggle_qsam)
+        self.action_use_qsam.toggled.connect(self.__on_toggle_qsam)
         self.addAction(self.action_use_qsam)
 
         #
@@ -194,7 +193,7 @@ class QSamToolBar(QToolBar):
         self.action_bbox_tool.setToolTip("Create BBox")
         self.action_bbox_tool.setCheckable(True)
         self.action_bbox_tool.setDisabled(True)
-        self.action_bbox_tool.toggled.connect(self._on_toggle_bbox)
+        self.action_bbox_tool.toggled.connect(self.__on_toggle_bbox)
         self.addAction(self.action_bbox_tool)
 
         #
@@ -204,10 +203,10 @@ class QSamToolBar(QToolBar):
         self.action_use_tool.setToolTip("Use SAM Tool")
         self.action_use_tool.setCheckable(True)
         self.action_use_tool.setDisabled(True)
-        self.action_use_tool.toggled.connect(self._on_toggle_tool)
+        self.action_use_tool.toggled.connect(self.__on_toggle_tool)
         self.addAction(self.action_use_tool)
 
-    def _on_toggle_qsam(self, state):
+    def __on_toggle_qsam(self, state):
         if state:
             self.action_bbox_tool.setDisabled(False)
             self.action_use_tool.setDisabled(False)
@@ -223,7 +222,7 @@ class QSamToolBar(QToolBar):
 
             self.activated.emit(0)
 
-    def _on_toggle_bbox(self, state):
+    def __on_toggle_bbox(self, state):
         if state:
             self.action_use_tool.setChecked(False)
             self.action_bbox_tool.setChecked(True)
@@ -234,7 +233,7 @@ class QSamToolBar(QToolBar):
             if self.tool_bbox.isActive():
                 self.tool_bbox.deactivate()
 
-    def _on_toggle_tool(self, state):
+    def __on_toggle_tool(self, state):
         if state:
             self.action_bbox_tool.setChecked(False)
             self.action_use_tool.setChecked(True)
