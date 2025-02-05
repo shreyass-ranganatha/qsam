@@ -43,6 +43,8 @@ class BBoxTool(QgsMapTool):
 
     def activate(self):
         self.canvas().setMapTool(self)
+        self.canvas().refresh()
+
         return super().activate()
 
     def deactivate(self):
@@ -124,6 +126,8 @@ class QSamTool(QgsMapTool):
 
     def activate(self):
         self.canvas().setMapTool(self)
+        self.canvas().refresh()
+
         return super().activate()
 
     def deactivate(self):

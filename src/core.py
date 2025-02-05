@@ -3,29 +3,20 @@
 from qgis.core import *
 from qgis.gui import *
 
-from PyQt5.QtWidgets import QMessageBox, QInputDialog
+from PyQt5.QtWidgets import QInputDialog
 from PyQt5.QtGui import QColor
 from PyQt5.QtCore import Qt, QVariant
 
-import matplotlib.pyplot as pt
 import rasterio.features
 import rasterio
-import numpy as np
 import tempfile
 
-from . import widgets, utils, sam, tasks
-
+from . import widgets, utils, sam, tasks, consts
 
 __all__ = ["QSAM"]
 
 
 class QSAM:
-    def _update_available_rasters(self, rasters):
-        self.available_rasters = rasters
-
-    def _update_selected_raster_index(self, index):
-        self.selected_raster_index = index
-
     def _bbox_select(self, bbox: QgsRectangle):
         if self.selected_raster_index < 0:
             return
@@ -36,28 +27,35 @@ class QSAM:
         self.render_state()
         self.toolbar.action_use_tool.toggle()
 
-        return
-
         # TODO move to custom QgsTask
         image = utils.image_from_layer(
             layer=self.available_rasters[self.selected_raster_index],
             bbox=bbox)
 
-        task = tasks.SamImageEmbedTask(
-            sam=self.sam,
-            image=image,
-            bbox=bbox,
-            description="QSAM Image Embed")
+        if consts.MODE_DEBUG:
+            self.sam.set_image(image[..., :3], self.bbox)
 
-        task_id = QgsApplication.instance().taskManager().addTask(task=task,)
+        else:
+            task = tasks.SamImageEmbedTask(
+                sam=self.sam,
+                image=image,
+                bbox=bbox,
+                description="QSAM Image Embed")
 
-        QgsMessageLog.logMessage(
-            f"Embed requested {{task_id: {task_id}}}",
-            "QSAM",
-            Qgis.Info)
+            task_id = QgsApplication.instance().taskManager().addTask(task=task,)
+
+            QgsMessageLog.logMessage(
+                message=f"Embed requested {{task_id: {task_id}}}",
+                tag="QSAM",
+                level=Qgis.Info)
 
     def _sam_stream(self, pt):
-        return
+        if not self.__stream_points:
+            self._rb_mask.reset()
+            self.canvas.refresh()
+
+            return
+
         mask = self.sam.stream(pt)
 
         if mask is None:
@@ -91,11 +89,35 @@ class QSAM:
             self._rb_mask.setWidth(2)
 
     def _sam_prompt(self, pts):
-        return
+        QgsMessageLog.logMessage(f"Prompting SAM with {pts}", "QSAM", Qgis.Info)
+
+        if self.selected_vector_index < 0:
+            return self.iface.messageBar().pushMessage(
+                title="Error",
+                text="Please select a vector layer",
+                duration=2)
 
         mask = self.sam.prompt(pts)
 
         if mask is None:
+            return
+
+        try:
+            layer = self.available_vectors[self.selected_vector_index]
+        except IndexError:
+            return self.iface.messageBar().pushMessage(
+                text="Error",
+                level="Invalid vector layer index",
+                duration=2)
+
+        class_id, _o = QInputDialog.getInt(None, "QSAM", "Enter the Class ID")
+
+        if not _o:
+            self.iface.messageBar().pushMessage(
+                text="Error",
+                level="Class ID not valid/provided",
+                duration=2)
+
             return
 
         bounds = rasterio.transform.from_bounds(
@@ -111,19 +133,28 @@ class QSAM:
             transform=bounds
         )
 
-        shapes = []
+        features = []
         for p, v in polygons:
             if v == 0:
                 continue
 
             pts = [QgsPointXY(x, y) for x, y in p["coordinates"][0]]
 
-            polygon = QgsGeometry.fromPolygonXY([pts])
-            shapes.append(polygon)
+            ft = QgsFeature()
+            ft.setGeometry(QgsGeometry.fromPolygonXY([pts]))
+            ft.setAttributes([1, class_id, ft.geometry().area()])
 
-            self._rb_mask.setToGeometry(polygon)
-            self._rb_mask.setColor(QColor(0, 0, 0, 100))
-            self._rb_mask.setWidth(2)
+            features.append(ft)
+
+        layer.startEditing()
+
+        layer.addFeatures(features)
+        self.canvas.refresh()
+
+        layer.commitChanges(stopEditing=True)
+
+        self.toolbar.tool_qsam.activate()
+        self.canvas.refresh()
 
     def __init__(self, iface: QgisInterface):
         self.iface = iface
@@ -133,8 +164,12 @@ class QSAM:
 
         # state
         self.bbox: QgsRectangle = None
-        self.available_rasters: list = []
+        self.available_rasters: list[QgsRasterLayer] = []
+        self.available_vectors: list[QgsVectorLayer] = []
         self.selected_raster_index: int = -1
+        self.selected_vector_index: int = -1
+
+        self.__stream_points: bool = True
 
     def __setup_toolbar(self):
         self.toolbar = widgets.QSamToolBar("QSAM Toolbar", canvas=self.canvas)
@@ -148,10 +183,19 @@ class QSAM:
 
     def __setup_panel(self):
         self.panel = widgets.QSamPanel("QSAM")
-        self.panel.widget_layers.available_rasters.connect(self._update_available_rasters)
-        self.panel.widget_layers.selected_raster_index.connect(self._update_selected_raster_index)
+
+        # widget layers
+        self.panel.widget_layers.available_rasters.connect(lambda v: setattr(self, "available_rasters", v))
+        self.panel.widget_layers.available_vectors.connect(lambda v: setattr(self, "available_vectors", v))
+
+        self.panel.widget_layers.selected_raster_index.connect(lambda v: setattr(self, "selected_raster_index", v))
+        self.panel.widget_layers.selected_vector_index.connect(lambda v: setattr(self, "selected_vector_index", v))
 
         self.panel.widget_layers.create_vector_layer.connect(self.__create_vector_layer)
+
+        # widget sam
+        self.panel.widget_sam.selected_device.connect(self.sam.set_device)
+        self.panel.widget_sam.streaming_enabled.connect(lambda v: setattr(self, "_QSAM__stream_points", v))
 
         self.panel.setup_ui()
         self.iface.addDockWidget(Qt.RightDockWidgetArea, self.panel)
@@ -192,8 +236,8 @@ class QSAM:
             QgsMessageLog.logMessage(wt.errorMessage(), "qSAM", Qgis.Critical)
         del wt
 
-        self.vector_layer = QgsVectorLayer(fname, lname, "ogr")
-        QgsProject.instance().addMapLayer(self.vector_layer)
+        layer = QgsVectorLayer(fname, lname, "ogr")
+        QgsProject.instance().addMapLayer(layer)
 
     def initGui(self):
         self._rb_bbox = QgsRubberBand(self.canvas, Qgis.GeometryType.Polygon)
@@ -201,7 +245,6 @@ class QSAM:
 
         self.__setup_panel()
         self.__setup_toolbar()
-        # self.__create_vector_layer()
 
     def render_state(self):
         self._rb_bbox.reset()

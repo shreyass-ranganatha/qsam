@@ -1,20 +1,26 @@
-from transformers import SamModel, SamProcessor
+from transformers import SamModel, SamProcessor, SamConfig
 import torch
-
-import os
 
 
 class SAM:
     def __init__(self, device="cpu"):
-        self.m = SamModel \
-            .from_pretrained("facebook/sam-vit-huge") \
-            .to(device)
+        #
+        self._cfg = SamConfig.from_pretrained("facebook/sam-vit-huge")
 
         self.p = SamProcessor.from_pretrained("facebook/sam-vit-huge")
+        self.m = SamModel.from_pretrained(
+            "facebook/sam-vit-huge", config=self._cfg)
+
+        #
+        self.set_device(device)
 
         #
         self.__image_embedding = None
         self.__image = None
+
+    def set_device(self, device):
+        self.device = torch.device(device)
+        self.m.to(device)
 
     def set_image(self, image, bbox):
         inp = self.p(

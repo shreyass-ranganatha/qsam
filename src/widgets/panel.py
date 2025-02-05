@@ -1,5 +1,7 @@
 from qgis.core import QgsProject
 
+import torch
+
 from PyQt5.QtWidgets import (
     QDockWidget,
     QComboBox,
@@ -36,6 +38,7 @@ class LayersWidget(QGroupBox):
     available_vectors = pyqtSignal(list)
 
     selected_raster_index = pyqtSignal(int)
+    selected_vector_index = pyqtSignal(int)
 
     create_vector_layer = pyqtSignal()
 
@@ -92,6 +95,7 @@ class LayersWidget(QGroupBox):
         QgsProject.instance().layersRemoved.connect(self.load_vector_layers)
 
         self.r_combo_rasters.currentIndexChanged.connect(self.selected_raster_index.emit)
+        self.v_combo_rasters.currentIndexChanged.connect(self.selected_vector_index.emit)
 
         self.v_action.clicked.connect(lambda: self.create_vector_layer.emit())
 
@@ -126,6 +130,9 @@ class LayersWidget(QGroupBox):
 
 
 class SamWidget(QGroupBox):
+    selected_device = pyqtSignal(str)
+    streaming_enabled = pyqtSignal(bool)
+
     def __init__(self, parent):
         super().__init__(title="SAM", parent=parent)
 
@@ -142,14 +149,19 @@ class SamWidget(QGroupBox):
             "facebook/sam-vit-huge"
         ])
 
-        self.device = QComboBox()
-        self.device.addItems([
+        devices = [
             "cpu",
-            "cuda",
-            "mps"
-        ])
+            "cuda" if torch.cuda.is_available() else None,
+            "mps" if torch.backends.mps.is_available() else None
+        ]
+
+        # devices
+        self.device = QComboBox()
+        self.device.addItems([d for d in devices if d is not None])
+        self.device.setCurrentIndex(0)
 
         self.device.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.device.currentTextChanged.connect(self.selected_device.emit)
 
         l = QHBoxLayout()
         l.addWidget(QLabel(text="Model"), stretch=.8)
@@ -173,6 +185,8 @@ class SamWidget(QGroupBox):
     def __setup_stream(self):
         self.stream = QCheckBox(text="Streaming Enabled")
         self.stream.setChecked(True)
+
+        self.stream.stateChanged.connect(lambda s: self.streaming_enabled.emit(s == Qt.Checked))
 
         l = QHBoxLayout()
         l.addWidget(self.stream)

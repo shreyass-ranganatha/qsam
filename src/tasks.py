@@ -8,7 +8,6 @@ class SamImageEmbedTask(QgsTask):
     def __init__(self, sam: SAM, image: np.ndarray, bbox: QgsRectangle, description: str = None):
         super().__init__(description=description, flags=QgsTask.CanCancel)
 
-        #
         self.sam = sam
 
         #
