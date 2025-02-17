@@ -131,6 +131,7 @@ class LayersWidget(QGroupBox):
 
 class SamWidget(QGroupBox):
     selected_device = pyqtSignal(str)
+    selected_model = pyqtSignal(str)
     streaming_enabled = pyqtSignal(bool)
 
     def __init__(self, parent):
@@ -142,7 +143,10 @@ class SamWidget(QGroupBox):
 
     def __setup_model_path(self):
         self.model_path = QComboBox()
+        # TODO
         self.model_path.setEditable(True)
+        self.model_path.setEnabled(True)
+
         self.model_path.addItems([
             "facebook/sam-vit-base",
             "facebook/sam-vit-large",
@@ -155,6 +159,11 @@ class SamWidget(QGroupBox):
             "mps" if torch.backends.mps.is_available() else None
         ]
 
+        self.m_reload_button = QPushButton(text="↻")
+        self.m_reload_button.clicked.connect(lambda: self.selected_model.emit(self.model_path.currentText()))
+        self.m_reload_button.setFixedWidth(30)
+        self.m_reload_button.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Minimum)
+
         # devices
         self.device = QComboBox()
         self.device.addItems([d for d in devices if d is not None])
@@ -166,6 +175,7 @@ class SamWidget(QGroupBox):
         l = QHBoxLayout()
         l.addWidget(QLabel(text="Model"), stretch=.8)
         l.addWidget(self.model_path, stretch=1)
+        l.addWidget(self.m_reload_button)
         l.addWidget(self.device, stretch=.2)
 
         return l

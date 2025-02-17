@@ -49,6 +49,23 @@ class QSAM:
                 tag="QSAM",
                 level=Qgis.Info)
 
+    def _sam_model_select(self, model: str):
+        if model == self.sam.model:
+            return
+
+        task = tasks.SamModelChangeTask(
+            sam=self.sam,
+            model=model,
+            description="QSAM Model Update",
+            callback=lambda m: self.panel.widget_sam.model_path.setCurrentText(m))
+
+        task_id = QgsApplication.instance().taskManager().addTask(task=task,)
+
+        QgsMessageLog.logMessage(
+            message=f"Model change requested {{task_id: {task_id}}}",
+            tag="QSAM",
+            level=Qgis.Info)
+
     def _sam_stream(self, pt):
         if not self.__stream_points:
             self._rb_mask.reset()
@@ -194,6 +211,7 @@ class QSAM:
         # widget sam
         self.panel.widget_sam.selected_device.connect(self.sam.set_device)
         self.panel.widget_sam.streaming_enabled.connect(lambda v: setattr(self, "_QSAM__stream_points", v))
+        self.panel.widget_sam.selected_model.connect(self._sam_model_select)
 
         self.panel.setup_ui()
         self.iface.addDockWidget(Qt.RightDockWidgetArea, self.panel)

@@ -1,15 +1,15 @@
 from transformers import SamModel, SamProcessor, SamConfig
 import torch
+import threading
 
 
 class SAM:
     def __init__(self, device="cpu"):
-        #
-        self._cfg = SamConfig.from_pretrained("facebook/sam-vit-huge")
+        self.t_lock = threading.Lock()
 
-        self.p = SamProcessor.from_pretrained("facebook/sam-vit-huge")
-        self.m = SamModel.from_pretrained(
-            "facebook/sam-vit-huge", config=self._cfg)
+        #
+        self.model = "facebook/sam-vit-base"
+        self.set_model(self.model)
 
         #
         self.set_device(device)
@@ -18,9 +18,24 @@ class SAM:
         self.__image_embedding = None
         self.__image = None
 
+    def set_model(self, model: str):
+        try:
+            self.p = SamProcessor.from_pretrained(model)
+            self.m = SamModel.from_pretrained(model)
+
+        except Exception as e:
+            self.p = SamProcessor.from_pretrained(self.model)
+            self.m = SamModel.from_pretrained(self.model)
+
+            raise
+
+        finally:
+            self.model = model
+
     def set_device(self, device):
-        self.device = torch.device(device)
-        self.m.to(device)
+        with self.t_lock:
+            self.device = torch.device(device)
+            self.m.to(device)
 
     def set_image(self, image, bbox):
         inp = self.p(
