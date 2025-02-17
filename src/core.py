@@ -106,19 +106,17 @@ class QSAM:
             layer = self.available_vectors[self.selected_vector_index]
         except IndexError:
             return self.iface.messageBar().pushMessage(
-                text="Error",
-                level="Invalid vector layer index",
+                text="Invalid vector layer index",
+                level=Qgis.MessageLevel.Warning,
                 duration=2)
 
         class_id, _o = QInputDialog.getInt(None, "QSAM", "Enter the Class ID")
 
         if not _o:
-            self.iface.messageBar().pushMessage(
-                text="Error",
-                level="Class ID not valid/provided",
+            return self.iface.messageBar().pushMessage(
+                text="Class ID not valid/provided",
+                level=Qgis.MessageLevel.Warning,
                 duration=2)
-
-            return
 
         bounds = rasterio.transform.from_bounds(
             self.sam.bbox.xMinimum(), self.sam.bbox.yMinimum(),
@@ -201,43 +199,15 @@ class QSAM:
         self.iface.addDockWidget(Qt.RightDockWidgetArea, self.panel)
 
     def __create_vector_layer(self):
-        fields = QgsFields()
-        fields.append(QgsField("id", QVariant.Int))
-        fields.append(QgsField("class", QVariant.Int))
-        fields.append(QgsField("area", QVariant.Double))
-
         p_crs = QgsProject.instance().crs()
-        t_ctx = QgsProject.instance().transformContext()
 
-        s_opt = QgsVectorFileWriter.SaveVectorOptions()
-        s_opt.driverName = "ESRI Shapefile"
-        s_opt.fileEncoding = "UTF-8"
-
-        # filepath = "/tmp/vectorfile.shp"
-        _, fname = tempfile.mkstemp(suffix=".shp")
-        # lname = "SAM shapes"
-
-        lname, ok = QInputDialog.getText(self.iface.mainWindow(), "Layer Name", "Enter name for the new vector layer:")
-        lname = lname.strip()
-
-        if not ok or not lname.strip():
-            return
-
-        wt = QgsVectorFileWriter.create(
-            fileName=fname,
-            fields=fields,
-            geometryType=QgsWkbTypes.Polygon,
-            srs=p_crs,
-            transformContext=t_ctx,
-            options=s_opt
+        vl = QgsVectorLayer(
+            path=f"Polygon?crs={p_crs.authid()}&field=id:integer&field=class:integer&field=area:double",
+            baseName="QSAM polys",
+            providerLib="memory",
         )
 
-        if wt.hasError() != QgsVectorFileWriter.NoError:
-            QgsMessageLog.logMessage(wt.errorMessage(), "qSAM", Qgis.Critical)
-        del wt
-
-        layer = QgsVectorLayer(fname, lname, "ogr")
-        QgsProject.instance().addMapLayer(layer)
+        QgsProject.instance().addMapLayer(vl)
 
     def initGui(self):
         self._rb_bbox = QgsRubberBand(self.canvas, Qgis.GeometryType.Polygon)
