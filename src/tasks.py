@@ -1,4 +1,4 @@
-from qgis.core import QgsTask, QgsRectangle, QgsMessageLog, Qgis
+from qgis.core import *
 import numpy as np
 
 from .sam import SAM

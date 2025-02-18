@@ -5,7 +5,7 @@ from qgis.gui import *
 
 from PyQt5.QtWidgets import QInputDialog
 from PyQt5.QtGui import QColor
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QVariant
 
 import rasterio.features
 import rasterio
@@ -261,14 +261,14 @@ class QSAM:
             features.append(ft)
 
         layer.startEditing()
-
-        layer.addFeatures(features)
-        self.canvas.refresh()
+        layer.dataProvider().addFeatures(features)
 
         layer.commitChanges(stopEditing=True)
         self.canvas.refresh()
 
+        self._rb_mask.reset()
         self.toolbar.btool.activate()
+
         self.canvas.refresh()
 
     def __init__(self, iface: QgisInterface):

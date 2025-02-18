@@ -84,6 +84,7 @@ class BBoxTool(QgsMapTool):
             self.approve_click.emit(self.__prev_bbox)
             self.__prev_bbox = None
 
+        self.canvas().refresh()
         return super().canvasPressEvent(e)
 
     def canvasMoveEvent(self, e: QgsMapMouseEvent):
