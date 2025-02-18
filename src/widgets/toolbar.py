@@ -12,6 +12,7 @@ __all__ = ["QSamToolBar"]
 
 class BBoxTool(QgsMapTool):
     bbox_select = pyqtSignal(QgsRectangle)
+    approve_click = pyqtSignal(QgsRectangle)
 
     def _draw_rect(self, x1y1, x2y2):
         self._rb.reset()
@@ -40,6 +41,7 @@ class BBoxTool(QgsMapTool):
         self.tracking = False
 
         self._rb = QgsRubberBand(self.canvas(), Qgis.GeometryType.Polygon)
+        self.__prev_bbox = None
 
     def activate(self):
         self.canvas().setMapTool(self)
@@ -59,19 +61,28 @@ class BBoxTool(QgsMapTool):
             self.x2y2 = None
 
             self.tracking = True
-
             self._draw_rect(self.x1y1, self.x1y1)
+
+            self.__prev_bbox = None
 
         elif (
             e.button() == Qt.RightButton and
             self.x1y1 is not None and
             self.x2y2 is not None
         ):
-            self.bbox_select.emit(QgsRectangle(self.x1y1, self.x2y2))
+            self.__prev_bbox = QgsRectangle(self.x1y1, self.x2y2)
+            self.bbox_select.emit(self.__prev_bbox)
 
             self.x1y1 = None
             self.x2y2 = None
             self._clear_rect()
+
+        elif (
+            e.button() == Qt.RightButton and
+            self.__prev_bbox is not None
+        ):
+            self.approve_click.emit(self.__prev_bbox)
+            self.__prev_bbox = None
 
         return super().canvasPressEvent(e)
 

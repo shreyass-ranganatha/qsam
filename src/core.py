@@ -25,7 +25,8 @@ class QSAM:
         self.toolbar.ptool.set_bbox(bbox)
 
         self.render_state()
-        self.toolbar.action_point_tool.toggle()
+        # NOTE: tool to enable after
+        self.toolbar.action_box_tool.toggle()
 
         # TODO move to custom QgsTask
         layer = self.available_rasters[self.selected_raster_index]
@@ -171,12 +172,10 @@ class QSAM:
         self.toolbar.ptool.activate()
         self.canvas.refresh()
 
-    def _sam_prompt_box(self, bbox: QgsRectangle):
+    def _sam_stream_box(self, bbox: QgsRectangle):
         bbox = [
-            bbox.xMinimum(),
-            bbox.yMinimum(),
-            bbox.xMaximum(),
-            bbox.yMaximum()]
+            bbox.xMinimum(), bbox.yMinimum(),
+            bbox.xMaximum(), bbox.yMaximum()]
 
         mask = self.sam.prompt_box(bbox)
 
@@ -210,6 +209,68 @@ class QSAM:
             self._rb_mask.setColor(QColor(0, 0, 0, 100))
             self._rb_mask.setWidth(2)
 
+        self.canvas.refresh()
+
+    def _sam_prompt_box(self, bbox: QgsRectangle):
+        bbox = [
+            bbox.xMinimum(), bbox.yMinimum(),
+            bbox.xMaximum(), bbox.yMaximum()]
+
+        mask = self.sam.prompt_box(bbox)
+
+        if mask is None:
+            return
+
+        try:
+            layer = self.available_vectors[self.selected_vector_index]
+        except IndexError:
+            return self.iface.messageBar().pushMessage(
+                text="Invalid vector layer index",
+                level=Qgis.MessageLevel.Warning,
+                duration=2)
+
+        class_id, _o = QInputDialog.getInt(None, "QSAM", "Enter the Class ID")
+
+        bounds = rasterio.transform.from_bounds(
+            self.sam.bbox.xMinimum(), self.sam.bbox.yMinimum(),
+            self.sam.bbox.xMaximum(), self.sam.bbox.yMaximum(),
+            self.sam.image_width, self.sam.image_height
+        )
+
+        polygons = rasterio.features.shapes(
+            source=mask,
+            mask=mask,
+            connectivity=4,
+            transform=bounds
+        )
+
+        features = []
+        for p, v in polygons:
+            if v == 0:
+                continue
+
+            pts = [QgsPointXY(x, y) for x, y in p["coordinates"][0]]
+
+            geom = QgsGeometry.fromPolygonXY([pts])
+            area = geom.area()
+
+            ft = QgsFeature()
+            ft.setGeometry(geom)
+            ft.setAttributes([1, class_id, area])
+
+            features.append(ft)
+
+        layer.startEditing()
+
+        layer.addFeatures(features)
+        self.canvas.refresh()
+
+        layer.commitChanges(stopEditing=True)
+        self.canvas.refresh()
+
+        self.toolbar.btool.activate()
+        self.canvas.refresh()
+
     def __init__(self, iface: QgisInterface):
         self.iface = iface
         self.canvas = iface.mapCanvas()
@@ -232,7 +293,8 @@ class QSAM:
         self.toolbar.tool_aoi.bbox_select.connect(self._bbox_select)
         self.toolbar.ptool.stream.connect(self._sam_stream)
         self.toolbar.ptool.prompt.connect(self._sam_prompt)
-        self.toolbar.btool.bbox_select.connect(self._sam_prompt_box)
+        self.toolbar.btool.bbox_select.connect(self._sam_stream_box)
+        self.toolbar.btool.approve_click.connect(self._sam_prompt_box)
 
         self.iface.addToolBar(self.toolbar)
 

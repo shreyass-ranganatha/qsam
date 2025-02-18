@@ -26,7 +26,7 @@ def ptshow(img):
 def image_from_layer(
     layer: QgsRasterLayer,
     bbox: QgsRectangle,
-    min_scale: float = float("-inf"),
+    min_scale: float = .1,
 ) -> tuple[np.ndarray, list[float]]:
 
     proj = QgsProject.instance()
@@ -62,7 +62,7 @@ def image_from_layer(
     rimg = np.concatenate(rs, axis=2)
 
     if consts.MODE_DEBUG:
-        QgsMessageLog.logMessage(message=f"{rimg.shape}", tag="QSAM")
+        log(rimg.shape)
 
         import matplotlib.pyplot as pt
         pt.imshow(rimg); pt.show()
@@ -74,8 +74,12 @@ def empty_vector_layer(
     p_crs: QgsCoordinateReferenceSystem = QgsProject.instance().crs()
 ) -> QgsVectorLayer:
 
-    return QgsVectorLayer(
+    assert isinstance(p_crs, QgsCoordinateReferenceSystem), "Invalid CRS type"
+
+    layer = QgsVectorLayer(
         path=f"Polygon?crs={p_crs.authid()}&field=id:integer"
             "&field=class:integer&field=area:double",
         baseName="QSAM polys",
-        providerLib="memory" )
+        providerLib="memory", )
+
+    return layer
