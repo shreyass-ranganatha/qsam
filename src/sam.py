@@ -1,43 +1,45 @@
 from transformers import SamModel, SamProcessor, SamConfig
 import torch
-import threading
+import numpy as np
 
 
 class SAM:
-    def __init__(self, device="cpu"):
-        self.t_lock = threading.Lock()
-
+    def __init__(self, checkpoint: str = "facebook/sam-vit-base", device="cpu"):
         #
-        self.model = "facebook/sam-vit-base"
-        self.set_model(self.model)
-
-        #
+        self.set_checkpoint(checkpoint)
         self.set_device(device)
 
         #
+        self.checkpoint = None
+
         self.__image_embedding = None
         self.__image = None
+        self.__scale = None
 
-    def set_model(self, model: str):
-        try:
-            self.p = SamProcessor.from_pretrained(model)
-            self.m = SamModel.from_pretrained(model)
+    @property
+    def image(self):
+        return self.__image
 
-        except Exception as e:
-            self.p = SamProcessor.from_pretrained(self.model)
-            self.m = SamModel.from_pretrained(self.model)
+    @property
+    def image_width(self):
+        return self.__image.shape[1]
 
-            raise
+    @property
+    def image_height(self):
+        return self.__image.shape[0]
 
-        finally:
-            self.model = model
+    def set_checkpoint(self, id: str, local_files_only: bool = True):
+        p = SamProcessor.from_pretrained(id, local_files_only=local_files_only)
+        m = SamModel.from_pretrained(id, local_files_only=local_files_only)
+
+        self.p, self.m = p, m
+        self.checkpoint = id
 
     def set_device(self, device):
-        with self.t_lock:
-            self.device = torch.device(device)
-            self.m.to(device)
+        self.device = torch.device(device)
+        self.m.to(device)
 
-    def set_image(self, image, bbox):
+    def set_image(self, image, scale, bbox):
         inp = self.p(
             images=image,
             return_tensors="pt"
@@ -49,14 +51,17 @@ class SAM:
 
         self.bbox = bbox
         self.__image = image
+        self.__scale = scale
+
+        return True
 
     def stream(self, pt):
         if self.__image_embedding is None:
             return
 
         x, y = pt.x(), pt.y()
-        x = round(x - self.bbox.xMinimum())
-        y = round(self.bbox.yMaximum() - y)
+        x = (x - self.bbox.xMinimum()) / self.__scale[0]
+        y = (self.bbox.yMaximum() - y) / self.__scale[1]
 
         inp = self.p(
             images=self.__image,
@@ -86,8 +91,8 @@ class SAM:
 
         ps = [
             [
-                round(p[0] - self.bbox.xMinimum()),
-                round(self.bbox.yMaximum() - p[1]),
+                (p[0] - self.bbox.xMinimum()) / self.__scale[0],
+                (self.bbox.yMaximum() - p[1]) / self.__scale[1],
             ] for p in pts
         ]
 
@@ -115,3 +120,38 @@ class SAM:
             inp["reshaped_input_sizes"].cpu())
 
         return rimg.to(torch.uint8)[0, 0].numpy()
+
+    def prompt_box(self, box):
+        box = [
+            (box[0] - self.bbox.xMinimum()) / self.__scale[0],
+            (self.bbox.yMaximum() - box[3]) / self.__scale[1],
+            (box[2] - self.bbox.xMinimum()) / self.__scale[0],
+            (self.bbox.yMaximum() - box[1]) / self.__scale[1],
+        ]
+
+        inp = self.p(
+            images=self.__image,
+            input_boxes=[[box]],
+            return_tensors="pt"
+        ).to(self.m.device)
+
+        del inp["pixel_values"]
+        inp["image_embeddings"] = self.__image_embedding
+
+        with torch.no_grad():
+            out = self.m.forward(
+                **inp,
+                multimask_output=True # NOTE
+            )
+
+        rimg, *_ = self.p.post_process_masks(
+            out.pred_masks.cpu(),
+            inp["original_sizes"].cpu(),
+            inp["reshaped_input_sizes"].cpu())
+
+        rimg = rimg.to(torch.uint8)[0] \
+            .any(axis=0) \
+            .numpy() \
+            .astype(np.uint8)
+
+        return rimg

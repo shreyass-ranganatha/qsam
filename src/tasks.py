@@ -5,7 +5,7 @@ from .sam import SAM
 
 
 class SamImageEmbedTask(QgsTask):
-    def __init__(self, sam: SAM, image: np.ndarray, bbox: QgsRectangle, description: str = None):
+    def __init__(self, sam: SAM, image: np.ndarray, bbox: QgsRectangle, scale: list[float], description: str = None):
         super().__init__(description=description, flags=QgsTask.CanCancel)
 
         self.sam = sam
@@ -13,9 +13,11 @@ class SamImageEmbedTask(QgsTask):
         #
         self.image = image
         self.bbox = bbox
+        self.scale = scale
 
     def run(self):
-        self.sam.set_image(self.image[..., :3], self.bbox)
+        self.sam.set_image(
+            image=self.image[..., :3], scale=self.scale, bbox=self.bbox)
         return True
 
     def finished(self, exception, res=None):
@@ -43,12 +45,12 @@ class SamModelChangeTask(QgsTask):
         self.callback = callback
 
     def run(self):
-        self.sam.set_model(self.model)
+        self.sam.set_checkpoint(id=self.model)
         return True
 
     def finished(self, exception, res=None):
         if self.callback is not None:
-            self.callback(self.sam.model)
+            self.callback(self.sam.checkpoint)
 
         if exception is not None:
             QgsMessageLog.logMessage(
@@ -59,6 +61,6 @@ class SamModelChangeTask(QgsTask):
             raise Exception("Model change failed. Check error logs")
 
         QgsMessageLog.logMessage(
-            f"Model changed {{model: {self.sam.model}}}",
+            f"Model changed {{model: {self.sam.checkpoint}}}",
             "QSAM",
             Qgis.Info)

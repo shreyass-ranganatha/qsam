@@ -90,7 +90,7 @@ class BBoxTool(QgsMapTool):
         return super().canvasReleaseEvent(e)
 
 
-class QSamTool(QgsMapTool):
+class PointTool(QgsMapTool):
     stream = pyqtSignal(QgsPointXY)
     prompt = pyqtSignal(list)
 
@@ -165,6 +165,7 @@ class QSamTool(QgsMapTool):
         if e.button() == Qt.LeftButton:
             self._clear_markers()
 
+        # elif e.button() == Qt.MiddleButton:
         elif e.button() == Qt.RightButton:
             self.prompt.emit([p[0] for p in self.points])
             self._clear_markers()
@@ -191,65 +192,93 @@ class QSamToolBar(QToolBar):
         self.addAction(self.action_use_qsam)
 
         #
-        self.tool_bbox = BBoxTool(self.canvas)
+        self.tool_aoi = BBoxTool(self.canvas)
 
-        self.action_bbox_tool = QAction("B", self)
-        self.action_bbox_tool.setToolTip("Create BBox")
-        self.action_bbox_tool.setCheckable(True)
-        self.action_bbox_tool.setDisabled(True)
-        self.action_bbox_tool.toggled.connect(self.__on_toggle_bbox)
-        self.addAction(self.action_bbox_tool)
+        self.action_aoi_tool = QAction("A", self)
+        self.action_aoi_tool.setToolTip("Create AOI")
+        self.action_aoi_tool.setCheckable(True)
+        self.action_aoi_tool.setDisabled(True)
+        self.action_aoi_tool.toggled.connect(self.__on_toggle_aoi)
+        self.addAction(self.action_aoi_tool)
 
         #
-        self.tool_qsam = QSamTool(self.canvas)
+        self.ptool = PointTool(self.canvas)
 
-        self.action_use_tool = QAction("T", self)
-        self.action_use_tool.setToolTip("Use SAM Tool")
-        self.action_use_tool.setCheckable(True)
-        self.action_use_tool.setDisabled(True)
-        self.action_use_tool.toggled.connect(self.__on_toggle_tool)
-        self.addAction(self.action_use_tool)
+        self.action_point_tool = QAction("T", self)
+        self.action_point_tool.setToolTip("SAM Point Prompt")
+        self.action_point_tool.setCheckable(True)
+        self.action_point_tool.setDisabled(True)
+        self.action_point_tool.toggled.connect(self.__on_toggle_ptool)
+        self.addAction(self.action_point_tool)
+
+        #
+        self.btool = BBoxTool(self.canvas)
+
+        self.action_box_tool = QAction("B", self)
+        self.action_box_tool.setToolTip("SAM Box Prompt")
+        self.action_box_tool.setCheckable(True)
+        self.action_box_tool.setDisabled(True)
+        self.action_box_tool.toggled.connect(self.__on_toggle_btool)
+        self.addAction(self.action_box_tool)
 
     def __on_toggle_qsam(self, state):
         if state:
-            self.action_bbox_tool.setDisabled(False)
-            self.action_use_tool.setDisabled(False)
+            self.action_aoi_tool.setDisabled(False)
+            self.action_point_tool.setDisabled(False)
+            self.action_box_tool.setDisabled(False)
 
             self.activated.emit(1)
 
         else:
-            self.action_bbox_tool.setChecked(False)
-            self.action_bbox_tool.setDisabled(True)
+            self.action_aoi_tool.setChecked(False)
+            self.action_aoi_tool.setDisabled(True)
 
-            self.action_use_tool.setChecked(False)
-            self.action_use_tool.setDisabled(True)
+            self.action_point_tool.setChecked(False)
+            self.action_point_tool.setDisabled(True)
+
+            self.action_box_tool.setChecked(False)
+            self.action_box_tool.setDisabled(True)
 
             self.activated.emit(0)
 
-    def __on_toggle_bbox(self, state):
+    def __on_toggle_aoi(self, state):
         if state:
-            self.action_use_tool.setChecked(False)
-            self.action_bbox_tool.setChecked(True)
+            self.action_aoi_tool.setChecked(True)
+            self.action_point_tool.setChecked(False)
+            self.action_box_tool.setChecked(False)
 
-            if not self.tool_bbox.isActive():
-                self.tool_bbox.activate()
+            if not self.tool_aoi.isActive():
+                self.tool_aoi.activate()
         else:
-            if self.tool_bbox.isActive():
-                self.tool_bbox.deactivate()
+            if self.tool_aoi.isActive():
+                self.tool_aoi.deactivate()
 
-    def __on_toggle_tool(self, state):
+    def __on_toggle_ptool(self, state):
         if state:
-            self.action_bbox_tool.setChecked(False)
-            self.action_use_tool.setChecked(True)
+            self.action_aoi_tool.setChecked(False)
+            self.action_point_tool.setChecked(True)
+            self.action_box_tool.setChecked(False)
 
-            if not self.tool_qsam.isActive():
-                self.tool_qsam.activate()
+            if not self.ptool.isActive():
+                self.ptool.activate()
         else:
-            if self.tool_qsam.isActive():
-                self.tool_qsam.deactivate()
+            if self.ptool.isActive():
+                self.ptool.deactivate()
+
+    def __on_toggle_btool(self, state):
+        if state:
+            self.action_aoi_tool.setChecked(False)
+            self.action_point_tool.setChecked(False)
+            self.action_box_tool.setChecked(True)
+
+            if not self.btool.isActive():
+                self.btool.activate()
+        else:
+            if self.btool.isActive():
+                self.btool.deactivate()
 
     def deleteLater(self):
-        self.tool_bbox.deactivate()
-        self.tool_qsam.deactivate()
+        self.tool_aoi.deactivate()
+        self.ptool.deactivate()
 
         return super().deleteLater()

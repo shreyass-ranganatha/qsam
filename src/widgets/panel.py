@@ -131,7 +131,7 @@ class LayersWidget(QGroupBox):
 
 class SamWidget(QGroupBox):
     selected_device = pyqtSignal(str)
-    selected_model = pyqtSignal(str)
+    selected_checkpoint = pyqtSignal(str)
     streaming_enabled = pyqtSignal(bool)
 
     def __init__(self, parent):
@@ -141,13 +141,17 @@ class SamWidget(QGroupBox):
 
         self.init_ui()
 
-    def __setup_model_path(self):
-        self.model_path = QComboBox()
-        # TODO
-        self.model_path.setEditable(True)
-        self.model_path.setEnabled(True)
+    def __cb_update_checkpoint(self):
+        self.m_reload_button.setEnabled(False)
+        self.selected_checkpoint.emit(self.m_checkpoints.currentText())
 
-        self.model_path.addItems([
+    def __setup_checkpoint(self):
+        self.m_checkpoints = QComboBox()
+        # TODO
+        self.m_checkpoints.setEnabled(True)
+        self.m_checkpoints.setEditable(True)
+
+        self.m_checkpoints.addItems([ # default checkpoints
             "facebook/sam-vit-base",
             "facebook/sam-vit-large",
             "facebook/sam-vit-huge"
@@ -160,23 +164,26 @@ class SamWidget(QGroupBox):
         ]
 
         self.m_reload_button = QPushButton(text="↻")
-        self.m_reload_button.clicked.connect(lambda: self.selected_model.emit(self.model_path.currentText()))
+        self.m_reload_button.clicked.connect(self.__cb_update_checkpoint)
         self.m_reload_button.setFixedWidth(30)
+        self.m_reload_button.setEnabled(False)
         self.m_reload_button.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Minimum)
+
+        # to enable m_reload_button
+        self.m_checkpoints.currentTextChanged.connect(lambda _: self.m_reload_button.setEnabled(True))
 
         # devices
         self.device = QComboBox()
         self.device.addItems([d for d in devices if d is not None])
         self.device.setCurrentIndex(0)
-
         self.device.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.device.currentTextChanged.connect(self.selected_device.emit)
 
         l = QHBoxLayout()
-        l.addWidget(QLabel(text="Model"), stretch=.8)
-        l.addWidget(self.model_path, stretch=1)
+        l.addWidget(QLabel(text="Checkpoint"), stretch=1)
+        l.addWidget(self.m_checkpoints, stretch=10)
         l.addWidget(self.m_reload_button)
-        l.addWidget(self.device, stretch=.2)
+        l.addWidget(self.device, stretch=2)
 
         return l
 
@@ -205,7 +212,7 @@ class SamWidget(QGroupBox):
 
     def init_ui(self):
         l_m = QVBoxLayout(self)
-        l_m.addLayout(self.__setup_model_path())
+        l_m.addLayout(self.__setup_checkpoint())
         # l_m.addLayout(self.__setup_device())
         l_m.addLayout(self.__setup_stream())
         l_m.addLayout(self.__setup_reload())
@@ -232,8 +239,8 @@ class QSamPanel(QDockWidget):
         l_m = QVBoxLayout(wdg_m)
         l_m.setAlignment(Qt.AlignTop)
 
-        l_m.addWidget(self.widget_layers, stretch=.2)
-        l_m.addWidget(self.widget_sam, stretch=.8)
+        l_m.addWidget(self.widget_layers)
+        l_m.addWidget(self.widget_sam)
         # ly_m.addWidget(Color("yellow"), stretch=1)
         # ly_m.addWidget(Color("blue"), stretch=1)
         wdg_m.setLayout(l_m)
