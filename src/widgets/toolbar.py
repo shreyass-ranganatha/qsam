@@ -103,7 +103,7 @@ class BBoxTool(QgsMapTool):
 
 
 class PointTool(QgsMapTool):
-    stream = pyqtSignal(QgsPointXY)
+    stream = pyqtSignal(list)
     prompt = pyqtSignal(list)
 
     def _mark_point(self, x, y, l):
@@ -170,7 +170,7 @@ class PointTool(QgsMapTool):
         if self.bbox is not None and not self.bbox.contains(pt):
             return
 
-        self.stream.emit(pt)
+        self.stream.emit([p[0] for p in self.points] + [(*pt, 1)])
         return super().canvasMoveEvent(e)
 
     def canvasDoubleClickEvent(self, e: QgsMapMouseEvent):

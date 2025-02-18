@@ -55,36 +55,6 @@ class SAM:
 
         return True
 
-    def stream(self, pt):
-        if self.__image_embedding is None:
-            return
-
-        x, y = pt.x(), pt.y()
-        x = (x - self.bbox.xMinimum()) / self.__scale[0]
-        y = (self.bbox.yMaximum() - y) / self.__scale[1]
-
-        inp = self.p(
-            images=self.__image,
-            input_points=[[[x, y]]],
-            return_tensors="pt"
-        ).to(self.m.device)
-
-        del inp["pixel_values"]
-        inp["image_embeddings"] = self.__image_embedding
-
-        with torch.no_grad():
-            out = self.m.forward(
-                **inp,
-                multimask_output=True # NOTE
-            )
-
-        rimg, *_ = self.p.post_process_masks(
-            out.pred_masks.cpu(),
-            inp["original_sizes"].cpu(),
-            inp["reshaped_input_sizes"].cpu())
-
-        return rimg.to(torch.uint8)[0, 0].numpy()
-
     def prompt(self, pts):
         if self.__image_embedding is None:
             return

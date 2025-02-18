@@ -67,14 +67,14 @@ class QSAM:
             tag="QSAM",
             level=Qgis.Info)
 
-    def _sam_stream(self, pt):
+    def _sam_stream(self, pts):
         if not self.__stream_points:
             self._rb_mask.reset()
             self.canvas.refresh()
 
             return
 
-        mask = self.sam.stream(pt)
+        mask = self.sam.prompt(pts)
 
         if mask is None:
             return
