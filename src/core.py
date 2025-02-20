@@ -30,8 +30,13 @@ class QSAM:
 
         # TODO move to custom QgsTask
         layer = self.available_rasters[self.selected_raster_index]
+
+        utils.log("resolution", self.__sam_resolution)
+        utils.log("model", self.sam.checkpoint)
+        utils.log("device", self.sam.device)
+
         image_context: utils.ImageContext = utils.image_from_layer(
-            layer=layer, bbox=bbox)
+            layer=layer, bbox=bbox, resolution=self.__sam_resolution)
 
         if consts.MODE_DEBUG:
             self.sam.set_image(image_context=image_context)
@@ -317,6 +322,7 @@ class QSAM:
         self.canvas = iface.mapCanvas()
 
         self.sam = sam.SAM()
+        self.__sam_resolution = 1000
 
         # state
         self.bbox: QgsRectangle = None
@@ -343,6 +349,9 @@ class QSAM:
         self.panel = widgets.QSamPanel("QSAM")
 
         # LAYERS
+        self.panel.widget_sam.m_resolution.setValue(self.__sam_resolution)
+        self.panel.widget_sam.resolution_set.connect(lambda v: setattr(self, "_QSAM__sam_resolution", v))
+
         self.panel.widget_layers.available_rasters.connect(lambda v: setattr(self, "available_rasters", v))
         self.panel.widget_layers.available_vectors.connect(lambda v: setattr(self, "available_vectors", v))
 
