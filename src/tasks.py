@@ -2,22 +2,18 @@ from qgis.core import *
 import numpy as np
 
 from .sam import SAM
+from . import utils
 
 
 class SamImageEmbedTask(QgsTask):
-    def __init__(self, sam: SAM, image: np.ndarray, bbox: QgsRectangle, scale: list[float], description: str = None):
+    def __init__(self, sam: SAM, context: utils.ImageContext, description: str = None):
         super().__init__(description=description, flags=QgsTask.CanCancel)
 
         self.sam = sam
-
-        #
-        self.image = image
-        self.bbox = bbox
-        self.scale = scale
+        self.context = context
 
     def run(self):
-        self.sam.set_image(
-            image=self.image[..., :3], scale=self.scale, bbox=self.bbox)
+        self.sam.set_image(image_context=self.context)
         return True
 
     def finished(self, exception, res=None):

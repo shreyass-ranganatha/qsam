@@ -8,8 +8,8 @@ from PyQt5.QtGui import QColor
 from PyQt5.QtCore import Qt, QVariant
 
 import rasterio.features
+import rasterio.transform
 import rasterio
-import tempfile
 
 from . import widgets, utils, sam, tasks, consts
 
@@ -17,7 +17,7 @@ __all__ = ["QSAM"]
 
 
 class QSAM:
-    def _bbox_select(self, bbox: QgsRectangle):
+    def _bbox_select(self, bbox: QgsReferencedRectangle):
         if self.selected_raster_index < 0:
             return
 
@@ -30,17 +30,16 @@ class QSAM:
 
         # TODO move to custom QgsTask
         layer = self.available_rasters[self.selected_raster_index]
-        image, scale = utils.image_from_layer(layer=layer, bbox=bbox)
+        image_context: utils.ImageContext = utils.image_from_layer(
+            layer=layer, bbox=bbox)
 
         if consts.MODE_DEBUG:
-            self.sam.set_image(image=image[..., :3], scale=scale, bbox=self.bbox)
+            self.sam.set_image(image_context=image_context)
 
         else:
             task = tasks.SamImageEmbedTask(
                 sam=self.sam,
-                image=image,
-                scale=scale,
-                bbox=bbox,
+                context=image_context,
                 description="QSAM Image Embed")
 
             task_id = QgsApplication.instance().taskManager().addTask(task=task,)
@@ -67,21 +66,35 @@ class QSAM:
             tag="QSAM",
             level=Qgis.Info)
 
-    def _sam_stream(self, pts):
-        if not self.__stream_points:
+    def _sam_stream(self, pts: list[list[QgsReferencedPointXY, int]]):
+        if not self.__stream_points or self.sam.context is None:
             self._rb_mask.reset()
             self.canvas.refresh()
 
             return
+
+        trf = QgsCoordinateTransform(
+            pts[0][0].crs(), self.sam.context.bbox.crs(), QgsProject.instance())
+
+        for i, (p, l) in enumerate(pts):
+            p = trf.transform(p)
+
+            p = self.sam.context.resolve(
+                p.x() - self.sam.context.bbox.xMinimum(),
+                self.sam.context.bbox.yMaximum() - p.y() )
+
+            pts[i] = [p, l]
 
         mask = self.sam.prompt(pts)
 
         if mask is None:
             return
 
+        p_bbox = self.sam.context.to_crs("proj")
+
         bounds = rasterio.transform.from_bounds(
-            self.sam.bbox.xMinimum(), self.sam.bbox.yMinimum(),
-            self.sam.bbox.xMaximum(), self.sam.bbox.yMaximum(),
+            p_bbox.xMinimum(), p_bbox.yMinimum(),
+            p_bbox.xMaximum(), p_bbox.yMaximum(),
             self.sam.image_width, self.sam.image_height
         )
 
@@ -106,7 +119,9 @@ class QSAM:
             self._rb_mask.setColor(QColor(0, 0, 0, 100))
             self._rb_mask.setWidth(2)
 
-    def _sam_prompt(self, pts):
+        self.canvas.refresh()
+
+    def _sam_prompt(self, pts: list[list[QgsReferencedPointXY, int]]):
         QgsMessageLog.logMessage(f"Prompting SAM with {pts}", "QSAM", Qgis.Info)
 
         if self.selected_vector_index < 0:
@@ -114,6 +129,18 @@ class QSAM:
                 title="Error",
                 text="Please select a vector layer",
                 duration=2)
+
+        trf = QgsCoordinateTransform(
+            pts[0][0].crs(), self.sam.context.bbox.crs(), QgsProject.instance())
+
+        for i, (p, l) in enumerate(pts):
+            p = trf.transform(p)
+
+            p = self.sam.context.resolve(
+                p.x() - self.sam.context.bbox.xMinimum(),
+                self.sam.context.bbox.yMaximum() - p.y() )
+
+            pts[i] = [p, l]
 
         mask = self.sam.prompt(pts)
 
@@ -128,17 +155,20 @@ class QSAM:
                 level=Qgis.MessageLevel.Warning,
                 duration=2)
 
-        class_id, _o = QInputDialog.getInt(None, "QSAM", "Enter the Class ID")
+        class_id, _ = QInputDialog.getInt(None, "QSAM", "Enter the Class ID")
 
-        if not _o:
+        if not _:
             return self.iface.messageBar().pushMessage(
                 text="Class ID not valid/provided",
                 level=Qgis.MessageLevel.Warning,
                 duration=2)
 
+        # projecting to vector layer
+        p_bbox = self.sam.context.to_crs(layer.crs())
+
         bounds = rasterio.transform.from_bounds(
-            self.sam.bbox.xMinimum(), self.sam.bbox.yMinimum(),
-            self.sam.bbox.xMaximum(), self.sam.bbox.yMaximum(),
+            p_bbox.xMinimum(), p_bbox.yMinimum(),
+            p_bbox.xMaximum(), p_bbox.yMaximum(),
             self.sam.image_width, self.sam.image_height
         )
 
@@ -155,16 +185,17 @@ class QSAM:
                 continue
 
             pts = [QgsPointXY(x, y) for x, y in p["coordinates"][0]]
+            geom = QgsGeometry.fromPolygonXY([pts])
 
             ft = QgsFeature()
-            ft.setGeometry(QgsGeometry.fromPolygonXY([pts]))
-            ft.setAttributes([1, class_id, ft.geometry().area()])
+            ft.setGeometry(geom)
+            ft.setAttributes([1, class_id, geom.area()])
 
             features.append(ft)
 
         layer.startEditing()
 
-        layer.addFeatures(features)
+        layer.dataProvider().addFeatures(features)
         self.canvas.refresh()
 
         layer.commitChanges(stopEditing=True)
@@ -172,19 +203,23 @@ class QSAM:
         self.toolbar.ptool.activate()
         self.canvas.refresh()
 
-    def _sam_stream_box(self, bbox: QgsRectangle):
-        bbox = [
-            bbox.xMinimum(), bbox.yMinimum(),
-            bbox.xMaximum(), bbox.yMaximum()]
+    def _sam_stream_box(self, bbox: QgsReferencedRectangle):
+        # prepare bbox
+        bbox = QgsCoordinateTransform(bbox.crs(), self.sam.context.bbox.crs(), QgsProject.instance()) \
+            .transformBoundingBox(bbox)
 
-        mask = self.sam.prompt_box(bbox)
+        box: list[float] = self.sam.context.internal_box(bbox)
+        mask = self.sam.prompt_box(box)
 
         if mask is None:
             return
 
+        # project the mask to the project CRS for ribbon
+        p_bbox = self.sam.context.to_crs("proj")
+
         bounds = rasterio.transform.from_bounds(
-            self.sam.bbox.xMinimum(), self.sam.bbox.yMinimum(),
-            self.sam.bbox.xMaximum(), self.sam.bbox.yMaximum(),
+            p_bbox.xMinimum(), p_bbox.yMinimum(),
+            p_bbox.xMaximum(), p_bbox.yMaximum(),
             self.sam.image_width, self.sam.image_height
         )
 
@@ -211,12 +246,14 @@ class QSAM:
 
         self.canvas.refresh()
 
-    def _sam_prompt_box(self, bbox: QgsRectangle):
-        bbox = [
-            bbox.xMinimum(), bbox.yMinimum(),
-            bbox.xMaximum(), bbox.yMaximum()]
+    def _sam_prompt_box(self, bbox: QgsReferencedRectangle):
+        # prepare bbox
+        bbox = QgsCoordinateTransform(bbox.crs(), self.sam.context.bbox.crs(), QgsProject.instance()) \
+            .transformBoundingBox(bbox)
 
-        mask = self.sam.prompt_box(bbox)
+        box: list[float] = self.sam.context.internal_box(bbox)
+
+        mask = self.sam.prompt_box(box)
 
         if mask is None:
             return
@@ -229,11 +266,15 @@ class QSAM:
                 level=Qgis.MessageLevel.Warning,
                 duration=2)
 
-        class_id, _o = QInputDialog.getInt(None, "QSAM", "Enter the Class ID")
+        # input class ID
+        class_id, _ = QInputDialog.getInt(None, "QSAM", "Enter the Class ID")
+
+        # project the mask to the vector layer's CRS
+        v_bbox = self.sam.context.to_crs(layer.crs())
 
         bounds = rasterio.transform.from_bounds(
-            self.sam.bbox.xMinimum(), self.sam.bbox.yMinimum(),
-            self.sam.bbox.xMaximum(), self.sam.bbox.yMaximum(),
+            v_bbox.xMinimum(), v_bbox.yMinimum(),
+            v_bbox.xMaximum(), v_bbox.yMaximum(),
             self.sam.image_width, self.sam.image_height
         )
 
@@ -290,7 +331,7 @@ class QSAM:
         self.toolbar = widgets.QSamToolBar("QSAM Toolbar", canvas=self.canvas)
         self.toolbar.activated.connect(lambda s: self.render_state() if s else self.clear_canvas())
 
-        self.toolbar.tool_aoi.bbox_select.connect(self._bbox_select)
+        self.toolbar.tool_roi.bbox_select.connect(self._bbox_select)
         self.toolbar.ptool.stream.connect(self._sam_stream)
         self.toolbar.ptool.prompt.connect(self._sam_prompt)
         self.toolbar.btool.bbox_select.connect(self._sam_stream_box)

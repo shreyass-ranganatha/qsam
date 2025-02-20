@@ -1,5 +1,20 @@
-from qgis.gui import QgsMapCanvas, QgsMapTool, QgsRubberBand, QgsMapMouseEvent, QgsVertexMarker, QgsMapToolExtent
-from qgis.core import QgsWkbTypes, QgsGeometry, QgsRectangle, Qgis, QgsPointXY
+from qgis.gui import (
+    QgsMapCanvas,
+    QgsMapTool,
+    QgsRubberBand,
+    QgsMapMouseEvent,
+    QgsVertexMarker,
+    QgsMapToolExtent)
+
+from qgis.core import *
+from qgis.core import (
+    QgsWkbTypes,
+    QgsGeometry,
+    QgsRectangle,
+    QgsReferencedRectangle,
+    Qgis,
+    QgsProject,
+    QgsPointXY,)
 
 from PyQt5.QtWidgets import QToolBar, QAction, QGraphicsScene
 from PyQt5.QtWidgets import QMessageBox
@@ -11,8 +26,8 @@ __all__ = ["QSamToolBar"]
 
 
 class BBoxTool(QgsMapTool):
-    bbox_select = pyqtSignal(QgsRectangle)
-    approve_click = pyqtSignal(QgsRectangle)
+    bbox_select = pyqtSignal(QgsReferencedRectangle)
+    approve_click = pyqtSignal(QgsReferencedRectangle)
 
     def _draw_rect(self, x1y1, x2y2):
         self._rb.reset()
@@ -41,7 +56,7 @@ class BBoxTool(QgsMapTool):
         self.tracking = False
 
         self._rb = QgsRubberBand(self.canvas(), Qgis.GeometryType.Polygon)
-        self.__prev_bbox = None
+        self.__prev_bbox: QgsReferencedRectangle = None
 
     def activate(self):
         self.canvas().setMapTool(self)
@@ -70,7 +85,12 @@ class BBoxTool(QgsMapTool):
             self.x1y1 is not None and
             self.x2y2 is not None
         ):
-            self.__prev_bbox = QgsRectangle(self.x1y1, self.x2y2)
+            proj = QgsProject.instance()
+
+            self.__prev_bbox = QgsReferencedRectangle(
+                rectangle=QgsRectangle(self.x1y1, self.x2y2),
+                crs=proj.crs())
+
             self.bbox_select.emit(self.__prev_bbox)
 
             self.x1y1 = None
@@ -106,21 +126,19 @@ class PointTool(QgsMapTool):
     stream = pyqtSignal(list)
     prompt = pyqtSignal(list)
 
-    def _mark_point(self, x, y, l):
-        pt = QgsPointXY(x, y)
-
+    def _mark_point(self, point: QgsReferencedPointXY, label: int):
         mrk = QgsVertexMarker(self.canvas())
-        mrk.setCenter(pt)
-        mrk.setColor(QColor(100, 255, 0) if l else QColor(255, 100, 0))
+        mrk.setCenter(point)
+        mrk.setColor(QColor(100, 255, 0) if label else QColor(255, 100, 0))
         mrk.setIconType(QgsVertexMarker.ICON_CIRCLE)
         mrk.setPenWidth(3)
 
         self.canvas().refresh()
-        self.points.append([(x, y, l), mrk])
+        self.points.append([point, label, mrk])
 
     def _clear_markers(self):
         scene: QGraphicsScene = self.canvas().scene()
-        for _, m in self.points:
+        for _, _, m in self.points:
             scene.removeItem(m)
 
         self.canvas().refresh()
@@ -149,28 +167,28 @@ class PointTool(QgsMapTool):
         return super().deactivate()
 
     def canvasPressEvent(self, e: QgsMapMouseEvent):
-        pos = self.toMapCoordinates(e.pos())
-        pt = QgsPointXY(pos.x(), pos.y())
+        pt = self.toMapCoordinates(e.pos())
+        pt = QgsReferencedPointXY(pt, crs=QgsProject.instance().crs())
 
         if self.bbox is not None and not self.bbox.contains(pt):
             return
 
         if e.button() == Qt.LeftButton:
-            self._mark_point(pos.x(), pos.y(), 1)
+            self._mark_point(pt, 1)
 
         elif e.button() == Qt.RightButton:
-            self._mark_point(pos.x(), pos.y(), 0)
+            self._mark_point(pt, 0)
 
         return super().canvasPressEvent(e)
 
     def canvasMoveEvent(self, e: QgsMapMouseEvent):
-        pos = self.toMapCoordinates(e.pos())
-        pt = QgsPointXY(pos.x(), pos.y())
+        pt = self.toMapCoordinates(e.pos())
+        pt = QgsReferencedPointXY(pt, crs=QgsProject.instance().crs())
 
         if self.bbox is not None and not self.bbox.contains(pt):
             return
 
-        self.stream.emit([p[0] for p in self.points] + [(*pt, 1)])
+        self.stream.emit([p[:2] for p in self.points] + [(pt, 1)])
         return super().canvasMoveEvent(e)
 
     def canvasDoubleClickEvent(self, e: QgsMapMouseEvent):
@@ -179,7 +197,7 @@ class PointTool(QgsMapTool):
 
         # elif e.button() == Qt.MiddleButton:
         elif e.button() == Qt.RightButton:
-            self.prompt.emit([p[0] for p in self.points])
+            self.prompt.emit([p[:2] for p in self.points])
             self._clear_markers()
 
         return super().canvasDoubleClickEvent(e)
@@ -204,19 +222,19 @@ class QSamToolBar(QToolBar):
         self.addAction(self.action_use_qsam)
 
         #
-        self.tool_aoi = BBoxTool(self.canvas)
+        self.tool_roi = BBoxTool(self.canvas)
 
-        self.action_aoi_tool = QAction("A", self)
-        self.action_aoi_tool.setToolTip("Create AOI")
-        self.action_aoi_tool.setCheckable(True)
-        self.action_aoi_tool.setDisabled(True)
-        self.action_aoi_tool.toggled.connect(self.__on_toggle_aoi)
-        self.addAction(self.action_aoi_tool)
+        self.action_roi_tool = QAction("R", self)
+        self.action_roi_tool.setToolTip("Create ROI")
+        self.action_roi_tool.setCheckable(True)
+        self.action_roi_tool.setDisabled(True)
+        self.action_roi_tool.toggled.connect(self.__on_toggle_roi)
+        self.addAction(self.action_roi_tool)
 
         #
         self.ptool = PointTool(self.canvas)
 
-        self.action_point_tool = QAction("T", self)
+        self.action_point_tool = QAction("A", self)
         self.action_point_tool.setToolTip("SAM Point Prompt")
         self.action_point_tool.setCheckable(True)
         self.action_point_tool.setDisabled(True)
@@ -235,15 +253,15 @@ class QSamToolBar(QToolBar):
 
     def __on_toggle_qsam(self, state):
         if state:
-            self.action_aoi_tool.setDisabled(False)
+            self.action_roi_tool.setDisabled(False)
             self.action_point_tool.setDisabled(False)
             self.action_box_tool.setDisabled(False)
 
             self.activated.emit(1)
 
         else:
-            self.action_aoi_tool.setChecked(False)
-            self.action_aoi_tool.setDisabled(True)
+            self.action_roi_tool.setChecked(False)
+            self.action_roi_tool.setDisabled(True)
 
             self.action_point_tool.setChecked(False)
             self.action_point_tool.setDisabled(True)
@@ -253,21 +271,21 @@ class QSamToolBar(QToolBar):
 
             self.activated.emit(0)
 
-    def __on_toggle_aoi(self, state):
+    def __on_toggle_roi(self, state):
         if state:
-            self.action_aoi_tool.setChecked(True)
+            self.action_roi_tool.setChecked(True)
             self.action_point_tool.setChecked(False)
             self.action_box_tool.setChecked(False)
 
-            if not self.tool_aoi.isActive():
-                self.tool_aoi.activate()
+            if not self.tool_roi.isActive():
+                self.tool_roi.activate()
         else:
-            if self.tool_aoi.isActive():
-                self.tool_aoi.deactivate()
+            if self.tool_roi.isActive():
+                self.tool_roi.deactivate()
 
     def __on_toggle_ptool(self, state):
         if state:
-            self.action_aoi_tool.setChecked(False)
+            self.action_roi_tool.setChecked(False)
             self.action_point_tool.setChecked(True)
             self.action_box_tool.setChecked(False)
 
@@ -279,7 +297,7 @@ class QSamToolBar(QToolBar):
 
     def __on_toggle_btool(self, state):
         if state:
-            self.action_aoi_tool.setChecked(False)
+            self.action_roi_tool.setChecked(False)
             self.action_point_tool.setChecked(False)
             self.action_box_tool.setChecked(True)
 
@@ -290,7 +308,7 @@ class QSamToolBar(QToolBar):
                 self.btool.deactivate()
 
     def deleteLater(self):
-        self.tool_aoi.deactivate()
+        self.tool_roi.deactivate()
         self.ptool.deactivate()
 
         return super().deleteLater()

@@ -5,11 +5,60 @@ from qgis.core import (
     QgsProject,
     QgsVectorLayer,
     QgsMessageLog,
+    QgsReferencedRectangle,
     QgsMapLayerStyleManager,
     QgsCoordinateReferenceSystem )
 
 import numpy as np
+from dataclasses import dataclass
+
 from . import consts
+
+
+@dataclass
+class ImageContext:
+    image: np.ndarray
+    layer: QgsRasterLayer
+    bbox: QgsReferencedRectangle
+    scale: list[float]
+    resolution: float
+
+    def resolve(self, x: float, y: float) -> list[int, int]:
+        return [
+            x / self.scale[0] * self.resolution,
+            y / self.scale[1] * self.resolution]
+
+    def resolve_bbox(self, bbox: QgsReferencedRectangle) -> QgsReferencedRectangle:
+        return QgsReferencedRectangle(
+            QgsRectangle(
+                *self.resolve(bbox.xMinimum(), bbox.yMaximum()),
+                *self.resolve(bbox.xMaximum(), bbox.yMinimum())),
+            crs=self.bbox.crs() )
+
+    def internal_point(self, x: float, y: float) -> list[float]:
+        return self.resolve(x - self.bbox.xMinimum(), self.bbox.yMaximum() - y)
+
+    def internal_box(self, bbox: QgsReferencedRectangle) -> list[float]:
+        bbox = QgsReferencedRectangle(
+            rectangle=QgsRectangle(
+                bbox.xMinimum() - self.bbox.xMinimum(),
+                self.bbox.yMaximum() - bbox.yMaximum(),
+                bbox.xMaximum() - self.bbox.xMinimum(),
+                self.bbox.yMaximum() - bbox.yMinimum(),),
+            crs=self.bbox.crs() )
+
+        return list(self.resolve_bbox(bbox).toRectF().getCoords())
+
+    def to_crs(self, crs: QgsCoordinateReferenceSystem) -> QgsReferencedRectangle:
+        proj = QgsProject.instance()
+
+        if crs == "proj":
+            crs = proj.crs()
+
+        r = QgsCoordinateTransform(self.bbox.crs(), crs, proj) \
+            .transformBoundingBox(self.bbox)
+
+        return QgsReferencedRectangle(rectangle=r, crs=crs)
 
 
 def log(*args):
@@ -25,20 +74,22 @@ def ptshow(img):
 
 def image_from_layer(
     layer: QgsRasterLayer,
-    bbox: QgsRectangle,
-    min_scale: float = .1,
-) -> tuple[np.ndarray, list[float]]:
+    bbox: QgsReferencedRectangle,
+    resolution: float = 1000.
+) -> ImageContext:
 
     proj = QgsProject.instance()
-    bbox = QgsCoordinateTransform(proj.crs(), layer.crs(), proj) \
+
+    l_bbox = QgsCoordinateTransform(bbox.crs(), layer.crs(), proj) \
         .transformBoundingBox(bbox)
+    l_bbox = QgsReferencedRectangle(rectangle=l_bbox, crs=layer.crs())
 
-    scale = [
-        max(layer.rasterUnitsPerPixelX(), min_scale),
-        max(layer.rasterUnitsPerPixelY(), min_scale)]
+    l_scale = [layer.rasterUnitsPerPixelX(), layer.rasterUnitsPerPixelY()]
 
-    w, h = round(bbox.width() / scale[0]), round(bbox.height() / scale[1])
-    rs = []
+    w, h = round(l_bbox.width() / l_scale[0]), round(l_bbox.height() / l_scale[1])
+
+    s = resolution / max(w, h)
+    w, h = int(w * s), int(h * s)
 
     datatype = {
         1: np.uint8,
@@ -47,34 +98,44 @@ def image_from_layer(
         8: np.uint64
     }
 
+    rs = []
+
     # TODO improve this process
     for i in range(1, layer.bandCount()+1):
-
         band = np.frombuffer(
-            layer.dataProvider().block(i, bbox, w, h).data(),
+            layer.dataProvider().block(i, l_bbox, w, h).data(),
             dtype=datatype[layer.dataProvider().dataTypeSize(i)] )
+
+        assert 0 not in band.shape, f"Invalid shape of image {band.shape}"
 
         band = band.reshape(h, w, 1).astype(np.float64)
         band = (band - band.min()) / (band.max() - band.min()) * (2 ** 8)
 
         rs.append(band.astype(np.uint8))
 
+    # shape (H, W, C)
     rimg = np.concatenate(rs, axis=2)
 
     if consts.MODE_DEBUG:
         log(rimg.shape)
+        ptshow(rimg)
 
-        import matplotlib.pyplot as pt
-        pt.imshow(rimg); pt.show()
-
-    return rimg, np.array(scale)
+    return ImageContext(
+        image=rimg[..., :3], # TODO: Support FCC ?
+        layer=layer,
+        bbox=l_bbox,
+        scale=l_scale,
+        resolution=s )
 
 
 def empty_vector_layer(
-    p_crs: QgsCoordinateReferenceSystem = QgsProject.instance().crs()
+    p_crs: QgsCoordinateReferenceSystem = None
 ) -> QgsVectorLayer:
 
-    assert isinstance(p_crs, QgsCoordinateReferenceSystem), "Invalid CRS type"
+    if p_crs is None:
+        p_crs = QgsProject.instance().crs()
+
+    assert isinstance(p_crs, QgsCoordinateReferenceSystem), "Invalid CRS dtype"
 
     layer = QgsVectorLayer(
         path=f"Polygon?crs={p_crs.authid()}&field=id:integer"
