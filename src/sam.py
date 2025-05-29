@@ -1,5 +1,3 @@
-from qgis.core import QgsReferencedRectangle
-
 from transformers import SamModel, SamProcessor, SamConfig
 import torch
 import numpy as np
@@ -8,6 +6,7 @@ from . import utils
 
 
 class SAM:
+    # NOTE: do not change default values to the parameters
     def __init__(self, checkpoint: str = "facebook/sam-vit-base", device="cpu"):
         #
         self.set_checkpoint(checkpoint)
@@ -119,3 +118,110 @@ class SAM:
             .astype(np.uint8)
 
         return rimg
+
+
+from qgis.core import (
+    QgsReferencedRectangle,
+    QgsFeature,
+    QgsCoordinateTransform,
+    QgsProject,
+    QgsReferencedPointXY,
+    QgsPointXY,
+    QgsGeometry,
+    QgsCoordinateReferenceSystem
+)
+
+from PyQt5.QtWidgets import QInputDialog
+
+import rasterio
+
+class SAMBridgeForQGIS(SAM):
+    def qgs_prompt_points(
+        self,
+        pts: list[list[QgsReferencedPointXY, int]],
+        to_crs: QgsCoordinateReferenceSystem
+    ) -> list[QgsGeometry]:
+        """Prompt SAM with point prompts and return the shapes"""
+
+        trf = QgsCoordinateTransform(
+            pts[0][0].crs(), self.context.bbox.crs(), QgsProject.instance())
+
+        for i, (p, l) in enumerate(pts):
+            p = trf.transform(p)
+
+            p = self.context.resolve(
+                p.x() - self.context.bbox.xMinimum(),
+                self.context.bbox.yMaximum() - p.y() )
+
+            pts[i] = [p, l]
+
+        mask = self.prompt(pts)
+
+        if mask is None:
+            return []
+
+        p_bbox = self.context.to_crs(to_crs)
+
+        bounds = rasterio.transform.from_bounds(
+            p_bbox.xMinimum(), p_bbox.yMinimum(),
+            p_bbox.xMaximum(), p_bbox.yMaximum(),
+            self.image_width, self.image_height, )
+
+        polygons = rasterio.features.shapes(
+            source=mask,
+            mask=mask,
+            connectivity=4,
+            transform=bounds, )
+
+        shapes = []
+        for p, v in polygons:
+            if v == 0:
+                continue
+
+            points = [QgsPointXY(x, y) for x, y in p["coordinates"][0]]
+            geom = QgsGeometry.fromPolygonXY([points])
+
+            shapes.append(geom)
+        return shapes
+
+    def qgs_prompt_bbox(
+        self,
+        bbox: QgsReferencedRectangle,
+        to_crs: QgsCoordinateReferenceSystem
+    ) -> list[QgsGeometry]:
+        """Prompt SAM with a bbox prompt and return the shapes"""
+
+        bbox = QgsCoordinateTransform(bbox.crs(), self.context.bbox.crs(), QgsProject.instance()) \
+            .transformBoundingBox(bbox)
+
+        box: list[float] = self.context.internal_box(bbox)
+
+        mask = self.prompt_box(box)
+
+        if mask is None:
+            return
+
+        # project the mask to the vector layer's CRS
+        v_bbox = self.context.to_crs(to_crs)
+
+        bounds = rasterio.transform.from_bounds(
+            v_bbox.xMinimum(), v_bbox.yMinimum(),
+            v_bbox.xMaximum(), v_bbox.yMaximum(),
+            self.image_width, self.image_height, )
+
+        polygons = rasterio.features.shapes(
+            source=mask,
+            mask=mask,
+            connectivity=4,
+            transform=bounds, )
+
+        shapes = []
+        for p, v in polygons:
+            if v == 0:
+                continue
+
+            pts = [QgsPointXY(x, y) for x, y in p["coordinates"][0]]
+            geom = QgsGeometry.fromPolygonXY([pts])
+
+            shapes.append(geom)
+        return shapes

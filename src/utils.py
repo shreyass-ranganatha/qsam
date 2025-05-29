@@ -5,9 +5,12 @@ from qgis.core import (
     QgsProject,
     QgsVectorLayer,
     QgsMessageLog,
+    QgsFeature,
     QgsReferencedRectangle,
     QgsMapLayerStyleManager,
     QgsCoordinateReferenceSystem )
+
+from qgis.gui import QgsMapCanvas
 
 import numpy as np
 from dataclasses import dataclass
@@ -144,3 +147,18 @@ def empty_vector_layer(
         providerLib="memory", )
 
     return layer
+
+
+def write_features_into_vector_layer(
+    features: list[QgsFeature],
+    layer: QgsVectorLayer,
+    canvas: QgsMapCanvas
+):
+    return True
+
+    layer.startEditing()
+    layer.dataProvider().addFeatures(features)
+
+    layer.commitChanges(stopEditing=True)
+    canvas.refresh()
+
