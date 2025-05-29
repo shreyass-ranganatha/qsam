@@ -80,7 +80,6 @@ class QSAM:
                 message="Please wait until an AOI is selected", )
 
             return False
-
         return True
 
     def _sam_stream(self, pts: list[list[QgsReferencedPointXY, int]]):
@@ -101,6 +100,8 @@ class QSAM:
         self.canvas.refresh()
 
     def _sam_prompt(self, pts: list[list[QgsReferencedPointXY, int]]):
+        # TODO: Fix window refresh bug, (right mouse click after saving should reset it)
+
         if not self.__sam_initial_check():
             return
 
@@ -164,6 +165,8 @@ class QSAM:
         """Finalise bbox prompts and write into vector layer
         Accept bbox -> segment -> write into vector layer"""
 
+        # TODO: Fix window refresh bug, (right mouse click after saving should reset it)
+
         if not self.__sam_initial_check():
             return
 
@@ -196,8 +199,6 @@ class QSAM:
             canvas=self.canvas
         ):
             self._rb_mask.reset()
-            self.toolbar.btool.activate()
-
             self.canvas.refresh()
 
     def __init__(self, iface: QgisInterface):

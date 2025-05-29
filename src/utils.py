@@ -154,11 +154,10 @@ def write_features_into_vector_layer(
     layer: QgsVectorLayer,
     canvas: QgsMapCanvas
 ):
-    return True
-
     layer.startEditing()
     layer.dataProvider().addFeatures(features)
 
     layer.commitChanges(stopEditing=True)
     canvas.refresh()
 
+    return True
