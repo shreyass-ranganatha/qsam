@@ -1,6 +1,5 @@
 from qgis.PyQt.QtCore import QStandardPaths
-from qgis.core import QgsProject, QgsReferencedRectangle, QgsApplication
-from processing import execAlgorithmDialog
+from qgis.core import QgsProject, QgsApplication
 
 from PyQt5.QtWidgets import (
     QDockWidget,
