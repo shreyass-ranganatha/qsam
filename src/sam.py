@@ -7,7 +7,7 @@ from . import utils
 
 class SAM:
     # NOTE: do not change default values to the parameters
-    def __init__(self, checkpoint: str = "facebook/sam-vit-base", device="cpu"):
+    def __init__(self, checkpoint: str = "facebook/sam-vit-large", device="cpu"):
         #
         self.set_checkpoint(checkpoint)
         self.set_device(device)

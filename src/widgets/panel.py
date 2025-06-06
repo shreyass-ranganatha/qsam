@@ -166,9 +166,9 @@ class SamWidget(QGroupBox):
         self.m_checkpoints.addItems([ # default checkpoints
             "facebook/sam-vit-base",
             "facebook/sam-vit-large",
-            "facebook/sam-vit-huge"
-        ])
+            "facebook/sam-vit-huge", ])
 
+        self.m_checkpoints.setCurrentIndex(1)
         self.m_checkpoints.currentTextChanged.connect(lambda _: self.m_reload_button.setEnabled(True))
 
         # model devices
