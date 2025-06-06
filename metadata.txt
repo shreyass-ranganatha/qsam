@@ -8,3 +8,4 @@ author=Shreyas Ranganatha
 email=shreyass.ranganatha@gmail.com
 tracker=https://github.com/shreyass-ranganatha/QSAM/issues
 repository=https://github.com/shreyass-ranganatha/QSAM
+hasProcessingProvider=True

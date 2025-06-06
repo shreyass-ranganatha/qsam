@@ -3,7 +3,7 @@
 from qgis.core import *
 from qgis.gui import *
 
-from PyQt5.QtWidgets import QInputDialog
+from PyQt5.QtWidgets import QInputDialog, QMessageBox
 from PyQt5.QtGui import QColor
 from PyQt5.QtCore import Qt, QVariant
 
@@ -11,7 +11,15 @@ import rasterio.features
 import rasterio.transform
 import rasterio
 
-from . import widgets, utils, sam, tasks, consts
+import os
+
+from . import (
+    widgets,
+    utils,
+    sam,
+    tasks,
+    consts,
+    data, )
 
 __all__ = ["QSAM"]
 
@@ -37,6 +45,8 @@ class QSAM:
 
         image_context: utils.ImageContext = utils.image_from_layer(
             layer=layer, bbox=bbox, resolution=self.__sam_resolution)
+
+        self.datastore.insert_roi(bbox)
 
         if consts.MODE_DEBUG:
             self.sam.set_image(image_context=image_context)
@@ -201,6 +211,27 @@ class QSAM:
             self._rb_mask.reset()
             self.canvas.refresh()
 
+    def __show_rois(self, v: bool):
+        self._rb_rois.reset()
+        self.canvas.refresh()
+
+        if v:
+            rts = self.datastore.list_rois()
+            if not rts:
+                return
+
+            geoms = []
+
+            for rt in rts:
+                geoms.append(QgsGeometry.fromRect(rt))
+
+            self._rb_rois.setToGeometry(QgsGeometry.collectGeometry(geoms), rt.crs())
+            self._rb_rois.setColor(QColor(0, 255, 0, 255))
+            self._rb_rois.setFillColor(QColor(255, 255, 255, 0))
+
+            self._rb_rois.setWidth(4)
+            self.canvas.refresh()
+
     def __init__(self, iface: QgisInterface):
         self.iface = iface
         self.canvas = iface.mapCanvas()
@@ -208,6 +239,8 @@ class QSAM:
         # self.sam = sam.SAM()
         self.sam = sam.SAMBridgeForQGIS()
         self.__sam_resolution = 1000
+
+        self.datastore = data.DataStore()
 
         # state variables
         self.bbox: QgsRectangle = None
@@ -237,9 +270,7 @@ class QSAM:
         self.iface.addToolBar(self.toolbar)
 
     def __setup_panel(self):
-        """Mapping the panels"""
-
-        self.panel = widgets.QSamPanel("QSAM")
+        self.panel = widgets.QSamPanel("QSAM", canvas=self.canvas)
 
         ## LAYERS
         self.panel.widget_sam.m_resolution.setValue(self.__sam_resolution)
@@ -261,12 +292,33 @@ class QSAM:
         self.panel.widget_sam.selected_checkpoint.connect(self._sam_model_select)
         self.panel.widget_sam.streaming_enabled.connect(lambda v: setattr(self, "_QSAM__stream_points", v))
 
+        ## DATASET
+        self.panel.widget_roi.show_rois.connect(self.__show_rois)
+
+        source_db_path = self.panel.widget_roi.i_rois_db_path.text()
+
+        if os.path.exists(source_db_path):
+            reply = QMessageBox().question(
+                None,
+                "QSAM — Confirm Action",
+                "The DB file exists, do you want to load the data in?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes)
+
+            if reply == QMessageBox.Yes:
+                self.datastore.load(source_db_path)
+
+        # MODEL
+        # self.panel.widget_model.inference_req.connect(
+        #     lambda bbox: self.modeling.inference_request(layer= , bbox=bbox))
+
         self.panel.setup_ui()
         self.iface.addDockWidget(Qt.RightDockWidgetArea, self.panel)
 
     def initGui(self):
         self._rb_bbox = QgsRubberBand(self.canvas, Qgis.GeometryType.Polygon)
         self._rb_mask = QgsRubberBand(self.canvas, Qgis.GeometryType.Polygon)
+        self._rb_rois = QgsRubberBand(self.canvas, Qgis.GeometryType.Polygon)
 
         self.__setup_panel()
         self.__setup_toolbar()
@@ -292,6 +344,10 @@ class QSAM:
         self.canvas.refresh()
 
     def unload(self):
+        # don't unload since it should persist without plugin
+        self._rb_rois.reset()
+        self.datastore.backup(self.panel.widget_roi.i_rois_db_path.text())
+
         self.clear_canvas()
 
         self.toolbar.deleteLater()

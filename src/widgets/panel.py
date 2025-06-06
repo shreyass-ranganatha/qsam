@@ -1,6 +1,6 @@
-from qgis.core import QgsProject
-
-import torch
+from qgis.PyQt.QtCore import QStandardPaths
+from qgis.core import QgsProject, QgsReferencedRectangle, QgsApplication
+from processing import execAlgorithmDialog
 
 from PyQt5.QtWidgets import (
     QDockWidget,
@@ -14,12 +14,16 @@ from PyQt5.QtWidgets import (
     QPushButton,
     QCheckBox,
     QSizePolicy,
-    QStyle
+    QStyle,
 )
 from PyQt5.QtWidgets import *
 from PyQt5.QtGui import QColor, QPalette, QKeyEvent, QIcon
 from PyQt5.QtCore import Qt, pyqtSignal
 
+import torch
+import os
+
+from .toolbar import BBoxTool
 from .. import utils
 
 
@@ -151,7 +155,8 @@ class SamWidget(QGroupBox):
 
     def __setup_objects(self):
         # reload button
-        self.m_reload_button = QPushButton(text="↻")
+        self.m_reload_button = QPushButton()
+        self.m_reload_button.setIcon(QgsApplication.getThemeIcon("mActionReload.svg"))
         self.m_reload_button.clicked.connect(self.__cb_update_checkpoint)
         self.m_reload_button.setFixedWidth(30)
         self.m_reload_button.setEnabled(False)
@@ -230,9 +235,84 @@ class SamWidget(QGroupBox):
         self.setLayout(l_m)
 
 
+class DatasetWidget(QGroupBox):
+    show_rois = pyqtSignal(bool)
+
+    def __select_save_path(self):
+        path, _ = QFileDialog.getSaveFileName(self, "Choose file to save", "", "SQLite (*.db, *.sqlite3)")
+
+        if path:
+            self.i_rois_db_path.setText(path)
+
+    def __init__(self, parent):
+        super().__init__(title="Datasets", parent=parent)
+
+        self.init_ui()
+
+    def __setup_objects(self):
+        self.m_export_button = QPushButton(text="Export")
+
+        # show ROIs
+        self.i_rois_db_path = QLineEdit()
+        self.i_rois_db_path.setEnabled(False)
+
+        db_path = QgsProject.instance().fileName()
+
+        if not os.path.exists(db_path):
+            db_path = QStandardPaths.writableLocation(QStandardPaths.TempLocation)
+        elif os.path.isfile(db_path):
+            db_path = os.path.dirname(db_path)
+        self.i_rois_db_path.setText(os.path.join(db_path, "qsam.sqlite3"))
+
+        self.i_rois_db_button = QPushButton()
+        self.i_rois_db_button.setText("...")
+        # self.i_rois_db_button.setIcon(QgsApplication.getThemeIcon("mActionFileOpen.svg"))
+        self.i_rois_db_button.setFixedWidth(30)
+        self.i_rois_db_button.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Minimum)
+        self.i_rois_db_button.clicked.connect(self.__select_save_path)
+
+        self.b_rois_save = QPushButton() #QgsApplication.getThemeIcon("/mActionFileSave"), "Save")
+        self.b_rois_save.setIcon(QgsApplication.getThemeIcon("mActionFileSave.svg"))
+        # self.b_rois_save.setIcon(QgsApplication.getThemeIcon("/mActionFileSave"))
+        self.b_rois_save.setToolTip("Save")
+        self.b_rois_save.setFixedWidth(30)
+        self.b_rois_save.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Minimum)
+
+        self.k_show_rois = QCheckBox(text="Show ROIs")
+        self.k_show_rois.setChecked(False)
+        self.k_show_rois.stateChanged.connect(lambda s: self.show_rois.emit(s == Qt.Checked))
+
+    def __layout_row_2(self):
+        l = QHBoxLayout()
+        l.addWidget(self.m_export_button)
+
+        return l
+
+    def __layout_row_1(self):
+        l = QHBoxLayout()
+        l.addWidget(QLabel(text="Path"))
+        l.addWidget(self.i_rois_db_path)
+        l.addWidget(self.i_rois_db_button)
+        l.addWidget(self.b_rois_save)
+
+        return l
+
+    def init_ui(self):
+        self.__setup_objects()
+
+        l_m = QVBoxLayout(self)
+        l_m.addLayout(self.__layout_row_1())
+        l_m.addWidget(self.k_show_rois)
+        # l_m.addLayout(self.__layout_row_2())
+
+        self.setLayout(l_m)
+
+
 class QSamPanel(QDockWidget):
-    def __init__(self, *args, **kw):
+    def __init__(self, *args, canvas, **kw):
         super().__init__(*args, **kw)
+
+        self.canvas = canvas
 
         self.setMinimumWidth(280)
         self.setAllowedAreas(Qt.RightDockWidgetArea | Qt.LeftDockWidgetArea)
@@ -244,14 +324,14 @@ class QSamPanel(QDockWidget):
 
         self.widget_layers = LayersWidget(self)
         self.widget_sam = SamWidget(self)
+        self.widget_roi = DatasetWidget(self)
 
         l_m = QVBoxLayout(wdg_m)
         l_m.setAlignment(Qt.AlignTop)
 
         l_m.addWidget(self.widget_layers)
         l_m.addWidget(self.widget_sam)
-        # ly_m.addWidget(Color("yellow"), stretch=1)
-        # ly_m.addWidget(Color("blue"), stretch=1)
+        l_m.addWidget(self.widget_roi)
         wdg_m.setLayout(l_m)
 
         self.setWidget(wdg_m)
