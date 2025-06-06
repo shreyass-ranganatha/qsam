@@ -6,7 +6,12 @@ from . import utils
 
 
 class SamImageEmbedTask(QgsTask):
-    def __init__(self, sam: SAM, context: utils.ImageContext, description: str = None):
+    def __init__(
+        self,
+        sam: SAM,
+        context: utils.ImageContext,
+        description: str = None
+    ):
         super().__init__(description=description, flags=QgsTask.CanCancel)
 
         self.sam = sam
