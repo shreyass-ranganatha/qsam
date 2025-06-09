@@ -44,7 +44,7 @@ class DataStore:
 
         self.db.commit()
 
-    def list_rois(self) -> list[QgsReferencedRectangle]:
+    def list_rois(self, superbox: QgsReferencedRectangle = None) -> list[QgsReferencedRectangle]:
         self.cursor.execute(
             "SELECT x_min, y_min, x_max, y_max, crs_id FROM rois;")
 
@@ -55,7 +55,12 @@ class DataStore:
             r = QgsRectangle(x_min, y_min, x_max, y_max)
             c = QgsCoordinateReferenceSystem(crs_id)
 
-            rs.append(QgsReferencedRectangle(rectangle=r, crs=c))
+            rt = QgsReferencedRectangle(rectangle=r, crs=c)
+
+            if superbox is not None and superbox.intersects(rt):
+                rs.append(QgsReferencedRectangle(superbox.intersect(rt), crs=superbox.crs()))
+            elif superbox is None:
+                rs.append(rt)
         return rs
 
     def load(self, path: str):

@@ -10,10 +10,12 @@ from qgis.core import (
     QgsMapLayerStyleManager,
     QgsCoordinateReferenceSystem )
 
-from qgis.gui import QgsMapCanvas
+from qgis.PyQt.QtCore import QStandardPaths
+from qgis.gui import QgsMapCanvas, QgsMessageBar
 
-import numpy as np
 from dataclasses import dataclass
+import numpy as np
+import os
 
 from . import consts
 
@@ -64,15 +66,18 @@ class ImageContext:
         return QgsReferencedRectangle(rectangle=r, crs=crs)
 
 
-def log(*args):
+def log(*args, banner=False):
     QgsMessageLog.logMessage(
         message=" ".join(str(_) for _ in args),
         tag="QSAM")
 
+    if banner:
+        QgsMessageBar().pushInfo("QSAM", " ".join(str(_) for _ in args))
+
 
 def ptshow(img):
     import matplotlib.pyplot as pt
-    pt.imshow(img); pt.show()
+    pt.imshow(img); pt.show(block=False)
 
 
 def image_from_layer(
@@ -161,3 +166,50 @@ def write_features_into_vector_layer(
     canvas.refresh()
 
     return True
+
+
+def normalize(a: np.ndarray):
+    """a is np.ndarray in shape (C, H, W)"""
+
+    a = a.astype(float)
+
+    for i in range(a.shape[0]):
+        a[i] = (a[i] - a[i].min()) / (a[i].max() - a[i].min())
+    return a.astype(np.float32)
+
+
+def get_db_path():
+    db_path = QgsProject.instance().fileName()
+
+    if not os.path.exists(db_path):
+        db_path = QStandardPaths.writableLocation(QStandardPaths.TempLocation)
+
+    elif os.path.isfile(db_path):
+        db_path = os.path.dirname(db_path)
+
+    return os.path.join(db_path, "qsam.sqlite3")
+
+
+def get_dataset_write_path():
+    ds_path = QgsProject.instance().fileName()
+
+    if not os.path.exists(ds_path):
+        ds_path = QStandardPaths.writableLocation(QStandardPaths.TempLocation)
+
+    elif os.path.isfile(ds_path):
+        ds_path = os.path.dirname(ds_path)
+
+    return os.path.join(ds_path, "qsam", "dataset")
+
+
+def extent_str_from_rectangle(rt: QgsReferencedRectangle) -> str:
+    return f"{rt.xMinimum():.8f},{rt.xMaximum():.8f},{rt.yMinimum():.8f},{rt.yMaximum():.8f} [EPSG:{rt.crs().postgisSrid()}]"
+
+    return f"{rt.xMinimum():.8f},{rt.yMinimum():.8f},{rt.xMaximum():.8f},{rt.yMaximum():.8f} [EPSG:{rt.crs().postgisSrid()}]"
+
+
+def get_vector_layer_uri(vl: QgsVectorLayer) -> str:
+    if vl.providerType() == "memory":
+        return f"memory://{vl.source()}"
+    else:
+        return vl.source()

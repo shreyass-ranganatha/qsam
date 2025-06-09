@@ -1,6 +1,8 @@
 from qgis.PyQt.QtCore import QStandardPaths
 from qgis.core import QgsProject, QgsApplication
 
+import processing
+
 from PyQt5.QtWidgets import (
     QDockWidget,
     QComboBox,
@@ -236,6 +238,7 @@ class SamWidget(QGroupBox):
 
 class DatasetWidget(QGroupBox):
     show_rois = pyqtSignal(bool)
+    export_button_clicked = pyqtSignal()
 
     def __select_save_path(self):
         path, _ = QFileDialog.getSaveFileName(self, "Choose file to save", "", "SQLite (*.db, *.sqlite3)")
@@ -250,18 +253,17 @@ class DatasetWidget(QGroupBox):
 
     def __setup_objects(self):
         self.m_export_button = QPushButton(text="Export")
+        self.m_export_button.clicked.connect(self.export_button_clicked.emit)
 
         # show ROIs
         self.i_rois_db_path = QLineEdit()
         self.i_rois_db_path.setEnabled(False)
 
-        db_path = QgsProject.instance().fileName()
+        # set db path
+        self.i_rois_db_path.setText(utils.get_db_path())
 
-        if not os.path.exists(db_path):
-            db_path = QStandardPaths.writableLocation(QStandardPaths.TempLocation)
-        elif os.path.isfile(db_path):
-            db_path = os.path.dirname(db_path)
-        self.i_rois_db_path.setText(os.path.join(db_path, "qsam.sqlite3"))
+        QgsProject.instance().projectSaved.connect(lambda: self.i_rois_db_path.setText(utils.get_db_path()))
+        QgsProject.instance().readProject.connect(lambda: self.i_rois_db_path.setText(utils.get_db_path()))
 
         self.i_rois_db_button = QPushButton()
         self.i_rois_db_button.setText("...")
@@ -302,9 +304,12 @@ class DatasetWidget(QGroupBox):
         l_m = QVBoxLayout(self)
         l_m.addLayout(self.__layout_row_1())
         l_m.addWidget(self.k_show_rois)
-        # l_m.addLayout(self.__layout_row_2())
+        l_m.addLayout(self.__layout_row_2())
 
         self.setLayout(l_m)
+
+    def get_db_path(self) -> str:
+        return self.i_rois_db_path.text()
 
 
 class QSamPanel(QDockWidget):

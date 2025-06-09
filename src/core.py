@@ -3,6 +3,8 @@
 from qgis.core import *
 from qgis.gui import *
 
+import processing
+
 from PyQt5.QtWidgets import QInputDialog, QMessageBox
 from PyQt5.QtGui import QColor
 from PyQt5.QtCore import Qt, QVariant
@@ -13,6 +15,7 @@ import rasterio
 
 import os
 
+from .processing_provider import QsamProcessingProvider
 from . import (
     widgets,
     utils,
@@ -48,6 +51,8 @@ class QSAM:
 
         self.datastore.insert_roi(bbox)
 
+        # return
+
         if consts.MODE_DEBUG:
             self.sam.set_image(image_context=image_context)
 
@@ -80,6 +85,26 @@ class QSAM:
             message=f"Model change requested {{task_id: {task_id}}}",
             tag="QSAM",
             level=Qgis.Info)
+
+    def __datasets_processing_alg(self):
+        db_file = self.panel.widget_roi.get_db_path()
+
+        if -1 in (self.selected_raster_index, self.selected_vector_index):
+            self.iface.messageBar().pushInfo("QSAM Export", "No raster / vector layer selected")
+            return
+
+        selected_raster = self.available_rasters[self.selected_raster_index]
+        selected_vector = self.available_vectors[self.selected_vector_index]
+
+        parameters = {
+            "DB_FILE": db_file,
+            "INPUT_RASTER": selected_raster.id(),
+            "INPUT_VECTOR": selected_vector.id(),
+            "OUTPUT_DIR": utils.get_dataset_write_path(),
+        }
+
+        self.datastore.backup(db_file)
+        processing.execAlgorithmDialog("qsam:export_dataset", parameters)
 
     def __sam_initial_check(self):
         """Initial checks for SAM prompts"""
@@ -308,12 +333,24 @@ class QSAM:
             if reply == QMessageBox.Yes:
                 self.datastore.load(source_db_path)
 
+        self.panel.widget_roi.export_button_clicked.connect(self.__datasets_processing_alg)
+
+        self.panel.widget_roi.i_rois_db_path.textChanged.connect(
+            lambda: (
+                self.datastore.backup(self.panel.widget_roi.i_rois_db_path.text())
+                if not os.path.exists(utils.get_db_path()) else
+                self.datastore.load(self.panel.widget_roi.i_rois_db_path.text())))
+
         # MODEL
         # self.panel.widget_model.inference_req.connect(
         #     lambda bbox: self.modeling.inference_request(layer= , bbox=bbox))
 
         self.panel.setup_ui()
         self.iface.addDockWidget(Qt.RightDockWidgetArea, self.panel)
+
+    def initProcessing(self):
+        self.processing_provider = QsamProcessingProvider()
+        QgsApplication.processingRegistry().addProvider(self.processing_provider)
 
     def initGui(self):
         self._rb_bbox = QgsRubberBand(self.canvas, Qgis.GeometryType.Polygon)
@@ -322,6 +359,9 @@ class QSAM:
 
         self.__setup_panel()
         self.__setup_toolbar()
+
+        # setup processing registry
+        self.initProcessing()
 
     def render_state(self):
         self._rb_bbox.reset()
@@ -352,3 +392,6 @@ class QSAM:
 
         self.toolbar.deleteLater()
         self.iface.removeDockWidget(self.panel)
+
+        # unload processing provider
+        QgsApplication.processingRegistry().removeProvider(self.processing_provider)
