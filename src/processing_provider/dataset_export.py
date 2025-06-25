@@ -248,7 +248,7 @@ class DatasetExportAlgorithm(QgsProcessingAlgorithm):
 
                         i_counter += 1
 
-                        if consts.DEBUG:
+                        if consts.MODE_DEBUG:
                             import matplotlib.pyplot as pt
 
                             (p_output_dir / "images-png").mkdir(exist_ok=True, parents=True)

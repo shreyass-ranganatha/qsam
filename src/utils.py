@@ -13,7 +13,10 @@ from qgis.core import (
 from qgis.PyQt.QtCore import QStandardPaths
 from qgis.gui import QgsMapCanvas, QgsMessageBar
 
+from rasterio.transform import from_bounds
+
 from dataclasses import dataclass
+from pathlib import Path
 import numpy as np
 import os
 
@@ -124,9 +127,9 @@ def image_from_layer(
     # shape (H, W, C)
     rimg = np.concatenate(rs, axis=2)
 
-    if consts.MODE_DEBUG:
-        log(rimg.shape)
-        ptshow(rimg)
+    # if consts.MODE_DEBUG:
+    #     log(rimg.shape)
+    #     ptshow(rimg)
 
     return ImageContext(
         image=rimg[..., :3], # TODO: Support FCC ?
@@ -168,6 +171,17 @@ def write_features_into_vector_layer(
     return True
 
 
+def transform_from_qgs_refrect(bbox, arr_shape):
+    width = arr_shape[1]  # cols
+    height = arr_shape[0]  # rows
+
+    transform = from_bounds(
+        bbox.xMinimum(), bbox.yMinimum(),
+        bbox.xMaximum(), bbox.yMaximum(),
+        width, height )
+    return transform
+
+
 def normalize(a: np.ndarray):
     """a is np.ndarray in shape (C, H, W)"""
 
@@ -190,7 +204,7 @@ def get_db_path():
     return os.path.join(db_path, "qsam.sqlite3")
 
 
-def get_dataset_write_path():
+def get_dataset_write_path() -> Path:
     ds_path = QgsProject.instance().fileName()
 
     if not os.path.exists(ds_path):
@@ -199,7 +213,19 @@ def get_dataset_write_path():
     elif os.path.isfile(ds_path):
         ds_path = os.path.dirname(ds_path)
 
-    return os.path.join(ds_path, "qsam", "dataset")
+    return Path(os.path.join(ds_path, "qsam", "dataset"))
+
+
+def get_model_write_path() -> Path:
+    ds_path = QgsProject.instance().fileName()
+
+    if not os.path.exists(ds_path):
+        ds_path = QStandardPaths.writableLocation(QStandardPaths.TempLocation)
+
+    elif os.path.isfile(ds_path):
+        ds_path = os.path.dirname(ds_path)
+
+    return Path(os.path.join(ds_path, "qsam", "models"))
 
 
 def extent_str_from_rectangle(rt: QgsReferencedRectangle) -> str:

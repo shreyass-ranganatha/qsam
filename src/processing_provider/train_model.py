@@ -5,8 +5,11 @@ from qgis.core import (
     QgsProcessing,
     QgsProcessingAlgorithm,
     QgsProcessingContext,
-    QgsProcessingException,
+    QgsProcessingParameterFile,
     QgsProcessingParameterEnum,
+    QgsProcessingParameterString,
+    QgsProcessingParameterNumber,
+    QgsProcessingParameterFolderDestination,
     QgsProcessingParameterMapLayer,
     QgsProcessingFeedback,
     QgsProcessingParameterFeatureSink,
@@ -14,10 +17,78 @@ from qgis.core import (
 )
 from qgis import processing
 
+from transformers import AutoModelForSemanticSegmentation, AutoImageProcessor, Trainer
+import torch.utils.data
+import torch
+
+import time
+
+from typing import Any, Optional
+
+from qgis.core import (
+    QgsProject,
+    QgsMapLayer,
+    QgsProcessingParameterNumber,
+    QgsProcessingParameterFolderDestination,
+    QgsProcessingParameterFile,
+    QgsReferencedRectangle,
+    QgsRectangle,
+    QgsRasterLayer,
+    QgsCoordinateReferenceSystem,
+    QgsProcessingParameterString,
+    QgsFeatureSink,
+    QgsProcessing,
+    QgsProcessingUtils,
+    QgsProcessingAlgorithm,
+    QgsProcessingContext,
+    QgsProcessingParameterRasterLayer,
+    QgsProcessingParameterVectorLayer,
+    QgsProcessingParameterEnum,
+    QgsProcessingParameterMapLayer,
+    QgsProcessingFeedback,
+    QgsProcessingParameterFeatureSink,
+    QgsProcessingParameterFeatureSource, )
+
+import processing
+
+import geopandas as gpd
+
+from rasterio.transform import rowcol
+from rasterio.windows import Window
+import rasterio.features
+import rasterio.io
+import rasterio
+
+from pathlib import Path
+import numpy as np
+import os
+
+from .. import data, utils, consts
 
 class Types:
     unet = 0
     model2 = "ResNet"
+
+
+class QsamDataset(torch.utils.data.Dataset):
+    def __init__(self, ds_path: Path):
+        super().__init__()
+
+        self.ds_path = Path(ds_path)
+
+        self.images_path = self.ds_path / "images"
+        self.labels_path = self.ds_path / "labels"
+
+        self.images = list(self.images_path.glob("*.npy"))
+
+    def __len__(self):
+        return len(self.images)
+
+    def __getitem__(self, index):
+        image_pt = self.images[index]
+        label_pt = self.labels_path / os.path.basename(image_pt)
+
+        return np.stack(np.load(image_pt), axis=2), np.load(label_pt).astype(np.uint8)
 
 
 class TrainModelAlgorithm(QgsProcessingAlgorithm):
@@ -34,192 +105,158 @@ class TrainModelAlgorithm(QgsProcessingAlgorithm):
     #     return "modeling"
 
     def shortHelpString(self) -> str:
-        return "Train a model using the selected data."
+        return "Train a model with a generated QSAM dataset."
 
     def initAlgorithm(self, config: Optional[dict[str, Any]] = None):
-        self.addParameter(QgsProcessingParameterEnum(
-            name="INPUT",
-            description="Model",
-            options=["Segformer: nvidia/mit-b0"],
-            defaultValue=0 )
+        self.addParameter(QgsProcessingParameterString(
+            name="RUN_ID",
+            description="Run ID", )
         )
 
-        self.addParameter(QgsProcessingParameterMapLayer(
-            name="INPUT",
-            description="Input layer",
-            types=[QgsProcessing.TypeVectorAnyGeometry],
-            defaultValue=0, )
+        self.addParameter(QgsProcessingParameterString(
+            name="MODEL_CHECKPOINT",
+            description="Model Checkpoint",
+            # options=["Segformer: nvidia/mit-b0"],
+            defaultValue="nvidia/mit-b0" )
         )
 
-    def processAlgorithm(self, parameters, context, feedback):
-        return
+        self.addParameter(QgsProcessingParameterNumber(
+            name="BATCH_SIZE",
+            description="Batch Size",
+            defaultValue=2,
+            minValue=1, )
+        )
+
+        self.addParameter(QgsProcessingParameterNumber(
+            name="NUM_EPOCHS",
+            description="Num Epochs",
+            defaultValue=5,
+            minValue=1, )
+        )
+
+        self.addParameter(QgsProcessingParameterFolderDestination(
+            name="DATASET_DIR",
+            description="Dataset Directory", )
+        )
+
+
+        self.addParameter(QgsProcessingParameterFolderDestination(
+            name="OUTPUT_DIR",
+            description="Train Output Directory", )
+        )
+
+    def __collate_fn(self, args, processor: AutoImageProcessor, feedback: QgsProcessingFeedback):
+        # args is (batch_size, 2 -> (image, label), ::)
+        images = []
+        labels = []
+
+        for image, label in args:
+            images.append(np.array(image))
+            labels.append(np.array(label))
+
+        inps = processor(
+            images=images,
+            segmentation_maps=labels,
+            return_tensors="pt", )
+
+        return inps
+
+    def train_fn(
+        self,
+        model: AutoModelForSemanticSegmentation,
+        processor: AutoImageProcessor,
+        dataset: torch.utils.data.Dataset,
+        params: dict,
+        feedback: QgsProcessingFeedback,
+        p_output_dir: str
+    ):
+        device = params.get("DEVICE", "mps")
+        model.to(device)
+
+        # -----------------------------
+        # prepare dataloader
+
+        dataloader = torch.utils.data.DataLoader(
+            dataset,
+            batch_size=params["BATCH_SIZE"],
+            shuffle=True,
+            collate_fn=lambda *args, **kw: self.__collate_fn(*args, **kw, processor=processor, feedback=feedback),
+        )
+
+        # -----------------------------
+        optimizer = torch.optim.AdamW(model.parameters(), lr=5e-5,)
+        global_min_loss = float('inf')
+
+        for e in range(params["NUM_EPOCHS"]):
+            time_start = time.time()
+
+            tr_losses = []
+
+            for batch in dataloader:
+                outs = model(**batch.to(device))
+
+                loss = outs.loss
+                tr_losses.append(loss.item())
+
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+
+            tr_loss = np.mean(tr_losses)
+
+            feedback.pushInfo(
+                f"Epoch {e:02} — "
+                f"train loss: {tr_loss} — "
+                f"time taken: {time.time() - time_start}")
+
+            if tr_loss < global_min_loss:
+                global_min_loss = tr_loss
+
+                feedback.pushDebugInfo(f"Minimum loss found, saving to {p_output_dir}")
+
+                processor.save_pretrained(p_output_dir)
+                model.save_pretrained(p_output_dir)
+
+    def processAlgorithm(
+        self,
+        params: dict[str, Any],
+        context: QgsProcessingContext,
+        feedback: QgsProcessingFeedback
+    ):
+        p_run_id = params["RUN_ID"]
+
+        p_output_dir: Path = Path(params["OUTPUT_DIR"]) / p_run_id
+        p_output_dir.mkdir(exist_ok=True, parents=True)
+
+        # -----------------------------
+        feedback.pushInfo("Preparing Dataset & DataLoader")
+
+        p_dataset_path = Path(params["DATASET_DIR"])
+
+        dataset = QsamDataset(p_dataset_path)
+        feedback.pushDebugInfo(f"{len(dataset)}")
+
+        # -----------------------------
+        feedback.pushInfo("Fetching Model")
+
+        p_checkpoint = params["MODEL_CHECKPOINT"]
+
+        model = AutoModelForSemanticSegmentation.from_pretrained(p_checkpoint)
+        processor = AutoImageProcessor.from_pretrained(p_checkpoint)
+
+        # -----------------------------
+        feedback.pushInfo("Training")
+
+        self.train_fn(
+            model=model,
+            processor=processor,
+            dataset=dataset,
+            params=params,
+            feedback=feedback,
+            p_output_dir=p_output_dir)
+
+        return {"OUTPUT": p_output_dir}
 
     @classmethod
     def createInstance(cls):
         return cls()
-
-
-class ExampleProcessingAlgorithm(QgsProcessingAlgorithm):
-    # Constants used to refer to parameters and outputs. They will be
-    # used when calling the algorithm from another algorithm, or when
-    # calling from the QGIS console.
-
-    INPUT = "INPUT"
-    OUTPUT = "OUTPUT"
-
-    def name(self) -> str:
-        """
-        Returns the algorithm name, used for identifying the algorithm. This
-        string should be fixed for the algorithm, and must not be localised.
-        The name should be unique within each provider. Names should contain
-        lowercase alphanumeric characters only and no spaces or other
-        formatting characters.
-        """
-        return "myscript"
-
-    def displayName(self) -> str:
-        """
-        Returns the translated algorithm name, which should be used for any
-        user-visible display of the algorithm name.
-        """
-        return "My Script"
-
-    def group(self) -> str:
-        """
-        Returns the name of the group this algorithm belongs to. This string
-        should be localised.
-        """
-        return "Example scripts"
-
-    def groupId(self) -> str:
-        """
-        Returns the unique ID of the group this algorithm belongs to. This
-        string should be fixed for the algorithm, and must not be localised.
-        The group id should be unique within each provider. Group id should
-        contain lowercase alphanumeric characters only and no spaces or other
-        formatting characters.
-        """
-        return "examplescripts"
-
-    def shortHelpString(self) -> str:
-        """
-        Returns a localised short helper string for the algorithm. This string
-        should provide a basic description about what the algorithm does and the
-        parameters and outputs associated with it.
-        """
-        return "Example algorithm short description"
-
-    def initAlgorithm(self, config: Optional[dict[str, Any]] = None):
-        """
-        Here we define the inputs and output of the algorithm, along
-        with some other properties.
-        """
-
-        # We add the input vector features source. It can have any kind of
-        # geometry.
-        self.addParameter(
-            QgsProcessingParameterFeatureSource(
-                self.INPUT,
-                "Input layer",
-                [QgsProcessing.SourceType.TypeVectorAnyGeometry],
-            )
-        )
-
-        # We add a feature sink in which to store our processed features (this
-        # usually takes the form of a newly created vector layer when the
-        # algorithm is run in QGIS).
-        self.addParameter(
-            QgsProcessingParameterFeatureSink(self.OUTPUT, "Output layer")
-        )
-
-    def processAlgorithm(
-        self,
-        parameters: dict[str, Any],
-        context: QgsProcessingContext,
-        feedback: QgsProcessingFeedback,
-    ) -> dict[str, Any]:
-        """
-        Here is where the processing itself takes place.
-        """
-
-        # Retrieve the feature source and sink. The 'dest_id' variable is used
-        # to uniquely identify the feature sink, and must be included in the
-        # dictionary returned by the processAlgorithm function.
-        source = self.parameterAsSource(parameters, self.INPUT, context)
-
-        # If source was not found, throw an exception to indicate that the algorithm
-        # encountered a fatal error. The exception text can be any string, but in this
-        # case we use the pre-built invalidSourceError method to return a standard
-        # helper text for when a source cannot be evaluated
-        if source is None:
-            raise QgsProcessingException(
-                self.invalidSourceError(parameters, self.INPUT)
-            )
-
-        (sink, dest_id) = self.parameterAsSink(
-            parameters,
-            self.OUTPUT,
-            context,
-            source.fields(),
-            source.wkbType(),
-            source.sourceCrs(),
-        )
-
-        # Send some information to the user
-        feedback.pushInfo(f"CRS is {source.sourceCrs().authid()}")
-
-        # If sink was not created, throw an exception to indicate that the algorithm
-        # encountered a fatal error. The exception text can be any string, but in this
-        # case we use the pre-built invalidSinkError method to return a standard
-        # helper text for when a sink cannot be evaluated
-        if sink is None:
-            raise QgsProcessingException(self.invalidSinkError(parameters, self.OUTPUT))
-
-        # Compute the number of steps to display within the progress bar and
-        # get features from source
-        total = 100.0 / source.featureCount() if source.featureCount() else 0
-        features = source.getFeatures()
-
-        for current, feature in enumerate(features):
-            # Stop the algorithm if cancel button has been clicked
-            if feedback.isCanceled():
-                break
-
-            # Add a feature in the sink
-            sink.addFeature(feature, QgsFeatureSink.Flag.FastInsert)
-
-            # Update the progress bar
-            feedback.setProgress(int(current * total))
-
-        # To run another Processing algorithm as part of this algorithm, you can use
-        # processing.run(...). Make sure you pass the current context and feedback
-        # to processing.run to ensure that all temporary layer outputs are available
-        # to the executed algorithm, and that the executed algorithm can send feedback
-        # reports to the user (and correctly handle cancellation and progress reports!)
-        if False:
-            buffered_layer = processing.run(
-                "native:buffer",
-                {
-                    "INPUT": dest_id,
-                    "DISTANCE": 1.5,
-                    "SEGMENTS": 5,
-                    "END_CAP_STYLE": 0,
-                    "JOIN_STYLE": 0,
-                    "MITER_LIMIT": 2,
-                    "DISSOLVE": False,
-                    "OUTPUT": "memory:",
-                },
-                context=context,
-                feedback=feedback,
-            )["OUTPUT"]
-
-        # Return the results of the algorithm. In this case our only result is
-        # the feature sink which contains the processed features, but some
-        # algorithms may return multiple feature sinks, calculated numeric
-        # statistics, etc. These should all be included in the returned
-        # dictionary, with keys matching the feature corresponding parameter
-        # or output names.
-        return {self.OUTPUT: dest_id}
-
-    def createInstance(self):
-        return self.__class__()

@@ -13,6 +13,7 @@ import rasterio.features
 import rasterio.transform
 import rasterio
 
+import numpy as np
 import os
 
 from .processing_provider import QsamProcessingProvider
@@ -105,6 +106,89 @@ class QSAM:
 
         self.datastore.backup(db_file)
         processing.execAlgorithmDialog("qsam:export_dataset", parameters)
+
+    def __modeling_processing_alg(self):
+        parameters = {
+            "DATASET_DIR": utils.get_dataset_write_path(),
+            "OUTPUT_DIR": utils.get_model_write_path(),
+        }
+
+        if consts.MODE_DEBUG:
+            parameters.update({
+                "RUN_ID": "debug-run",
+            })
+
+        processing.execAlgorithmDialog("qsam:train_model", parameters)
+
+    def __run_inference_task(self, bbox: QgsReferencedRectangle):
+        if self.selected_raster_index < 0:
+            return
+
+        # TODO move to custom QgsTask
+        layer = self.available_rasters[self.selected_raster_index]
+
+        utils.log("resolution", self.__sam_resolution)
+        utils.log("model", self.sam.checkpoint)
+        utils.log("device", self.sam.device)
+
+        image_context: utils.ImageContext = utils.image_from_layer(
+            layer=layer, bbox=bbox, resolution=self.__sam_resolution)
+
+        if consts.MODE_DEBUG:
+            from transformers import AutoModelForSemanticSegmentation, AutoImageProcessor
+            import torch
+
+            checkpoint = os.path.join(utils.get_model_write_path(), self.panel.widget_modeling.get_model_checkpoint())
+
+            m = AutoModelForSemanticSegmentation.from_pretrained(checkpoint)
+            m.to("mps")
+
+            p = AutoImageProcessor.from_pretrained(checkpoint)
+
+            inps = p(images=image_context.image, return_tensors="pt")
+
+            with torch.no_grad():
+                outs = m(**inps.to("mps"))
+
+            res, = p.post_process_semantic_segmentation(outs, target_sizes=[(int(bbox.height()), int(bbox.width())), ])
+            res = res.detach().cpu().numpy().astype(np.uint8)
+
+            transform = utils.transform_from_qgs_refrect(bbox, res.shape)
+            crs = bbox.crs().authid()  # e.g., 'EPSG:32643'
+
+            tmp_file = QgsProcessingUtils.generateTempFilename("inference_output.tif")
+
+            with rasterio.open(
+                tmp_file, "w",
+                driver="GTiff",
+                height=res.shape[0],
+                width=res.shape[1],
+                count=1,
+                dtype=res.dtype,
+                crs=crs,
+                transform=transform,
+            ) as dst:
+                dst.write(res[None, ...])
+
+            raster_layer = QgsRasterLayer(tmp_file, "inference_output")
+            QgsProject.instance().addMapLayer(raster_layer)
+
+            # self.iface.messageBar().pushInfo("QSAM", f"{res.shape} {np.unique(res)}")
+            # utils.ptshow(res)
+
+        else:
+            task = tasks.InferenceTask(
+                checkpoint=self.panel.widget_modeling.get_model_checkpoint(),
+                context=image_context,
+                bbox=bbox,
+                description="Inference")
+
+            task_id = QgsApplication.instance().taskManager().addTask(task=task,)
+
+            QgsMessageLog.logMessage(
+                message=f"Inference requested {{task_id: {task_id}}}",
+                tag="QSAM",
+                level=Qgis.Info)
 
     def __sam_initial_check(self):
         """Initial checks for SAM prompts"""
@@ -297,6 +381,7 @@ class QSAM:
     def __setup_panel(self):
         self.panel = widgets.QSamPanel("QSAM", canvas=self.canvas)
 
+        # ------------------------------------------------
         ## LAYERS
         self.panel.widget_sam.m_resolution.setValue(self.__sam_resolution)
         self.panel.widget_sam.resolution_set.connect(lambda v: setattr(self, "_QSAM__sam_resolution", v))
@@ -312,11 +397,13 @@ class QSAM:
         self.panel.widget_layers.create_vector_layer.connect(
             lambda: QgsProject.instance().addMapLayer(utils.empty_vector_layer()))
 
+        # ------------------------------------------------
         ## SAM
         self.panel.widget_sam.selected_device.connect(self.sam.set_device)
         self.panel.widget_sam.selected_checkpoint.connect(self._sam_model_select)
         self.panel.widget_sam.streaming_enabled.connect(lambda v: setattr(self, "_QSAM__stream_points", v))
 
+        # ------------------------------------------------
         ## DATASET
         self.panel.widget_roi.show_rois.connect(self.__show_rois)
 
@@ -341,9 +428,12 @@ class QSAM:
                 if not os.path.exists(utils.get_db_path()) else
                 self.datastore.load(self.panel.widget_roi.i_rois_db_path.text())))
 
-        # MODEL
-        # self.panel.widget_model.inference_req.connect(
-        #     lambda bbox: self.modeling.inference_request(layer= , bbox=bbox))
+        # ------------------------------------------------
+        # MODELING
+        self.panel.widget_modeling.train_model.connect(
+            self.__modeling_processing_alg)
+
+        self.panel.widget_modeling.bbox_tool.bbox_select.connect(self.__run_inference_task)
 
         self.panel.setup_ui()
         self.iface.addDockWidget(Qt.RightDockWidgetArea, self.panel)

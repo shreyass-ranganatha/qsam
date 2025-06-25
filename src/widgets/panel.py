@@ -1,5 +1,6 @@
 from qgis.PyQt.QtCore import QStandardPaths
-from qgis.core import QgsProject, QgsApplication
+from qgis.core import QgsProject, QgsApplication, QgsReferencedRectangle
+from qgis.gui import QgsMapCanvas
 
 import processing
 
@@ -312,6 +313,86 @@ class DatasetWidget(QGroupBox):
         return self.i_rois_db_path.text()
 
 
+class ModelingWidget(QGroupBox):
+    train_model = pyqtSignal()
+    inference_requested = pyqtSignal(QgsReferencedRectangle)
+
+    def __update_checkpoints(self):
+        models_path = utils.get_model_write_path()
+
+        checkpoints = []
+
+        for dir in os.listdir(models_path):
+            checkpoint_dir = models_path / dir
+
+            if checkpoint_dir.is_dir() and (checkpoint_dir / "model.safetensors").exists():
+                checkpoints.append(dir)
+
+        self.e_checkpoints.clear()
+        self.e_checkpoints.addItems(checkpoints)
+
+    def __toggle_bbox_tool(self, state):
+        if state:
+            self.bbox_tool.activate()
+        else:
+            self.bbox_tool.deactivate()
+
+    def __init__(self, parent, canvas: QgsMapCanvas):
+        super().__init__(title="Modeling", parent=parent)
+
+        self.canvas = canvas
+        self.bbox_tool: BBoxTool = BBoxTool(self.canvas)
+
+        self.init_ui()
+
+    def get_model_checkpoint(self):
+        return self.e_checkpoints.currentText()
+
+    def __setup_objects(self):
+        self.m_train_button = QPushButton(text="Train")
+        self.m_train_button.clicked.connect(self.train_model.emit)
+
+        # --------
+        self.e_checkpoints = QComboBox()
+
+        self.b_reload_checkpoints = QPushButton()
+        self.b_reload_checkpoints.setIcon(QgsApplication.getThemeIcon("mActionReload.svg"))
+        self.b_reload_checkpoints.setFixedWidth(30)
+        self.b_reload_checkpoints.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Minimum)
+
+        self.b_reload_checkpoints.clicked.connect(self.__update_checkpoints)
+        self.b_reload_checkpoints.click()
+
+        # --------
+        self.m_infer_button = QPushButton(text="Inference")
+        self.m_infer_button.setCheckable(True)
+        self.m_infer_button.toggled.connect(self.__toggle_bbox_tool)
+
+    def __layout_row_1(self):
+        l = QHBoxLayout()
+        l.addWidget(QLabel(text="Checkpoints"), stretch=1)
+        l.addWidget(self.e_checkpoints, stretch=10)
+        l.addWidget(self.b_reload_checkpoints)
+
+        return l
+
+    def __layout_row_2(self):
+        l = QHBoxLayout()
+        l.addWidget(self.m_infer_button)
+        l.addWidget(self.m_train_button)
+
+        return l
+
+    def init_ui(self):
+        self.__setup_objects()
+
+        l_m = QVBoxLayout(self)
+        l_m.addLayout(self.__layout_row_1())
+        l_m.addLayout(self.__layout_row_2())
+
+        self.setLayout(l_m)
+
+
 class QSamPanel(QDockWidget):
     def __init__(self, *args, canvas, **kw):
         super().__init__(*args, **kw)
@@ -329,6 +410,7 @@ class QSamPanel(QDockWidget):
         self.widget_layers = LayersWidget(self)
         self.widget_sam = SamWidget(self)
         self.widget_roi = DatasetWidget(self)
+        self.widget_modeling = ModelingWidget(self, canvas=self.canvas)
 
         l_m = QVBoxLayout(wdg_m)
         l_m.setAlignment(Qt.AlignTop)
@@ -336,6 +418,7 @@ class QSamPanel(QDockWidget):
         l_m.addWidget(self.widget_layers)
         l_m.addWidget(self.widget_sam)
         l_m.addWidget(self.widget_roi)
+        l_m.addWidget(self.widget_modeling)
         wdg_m.setLayout(l_m)
 
         self.setWidget(wdg_m)
